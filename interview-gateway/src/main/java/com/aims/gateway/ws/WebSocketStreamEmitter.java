@@ -7,17 +7,13 @@ import com.aims.infra.persistence.entity.InterviewSessionEntity;
 import com.aims.infra.persistence.service.InterviewRoundService;
 import com.aims.infra.persistence.service.InterviewSessionService;
 import com.aims.infra.service.TtsService;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketSession;
 
 /**
  * WebSocket 流式推送器：实现 {@link StreamEmitter}，把 Node 流式输出的 chunk 实时推送到 WebSocket。
@@ -83,30 +79,19 @@ public class WebSocketStreamEmitter implements StreamEmitter {
     public void emitStart(Long sessionId, int seq) {
         // 缓存 start 上下文，供 emitEnd 创建轮次时携带 seq
         pending.put(sessionId, new PendingRound(seq, null, null, null));
-        WebSocketSession session = resolve(sessionId);
-        if (session == null) {
-            return;
-        }
-        send(session, WsOutbound.questionStart(sessionId, null, seq));
+        // 广播到全部活跃连接（候选端主连接 + 管理端观察者）
+        sessionManager.broadcast(sessionId, WsOutbound.questionStart(sessionId, null, seq));
     }
 
     @Override
     public void emit(Long sessionId, String chunk) {
-        WebSocketSession session = resolve(sessionId);
-        if (session == null) {
-            // sessionId 为空（如单元测试直接调 Node）或客户端断开，静默丢弃，避免 Node 执行失败
-            return;
-        }
         // roundId 在 chunk 阶段尚未创建，传 null；前端按 sessionId+seq 累积 chunk
-        send(session, WsOutbound.questionChunk(sessionId, null, chunk));
+        // 无活跃连接时 broadcast 内部静默丢弃，避免 Node 执行失败
+        sessionManager.broadcast(sessionId, WsOutbound.questionChunk(sessionId, null, chunk));
     }
 
     @Override
     public void emitEnd(Long sessionId, String fullQuestion) {
-        WebSocketSession session = resolve(sessionId);
-        if (session == null) {
-            return;
-        }
         // 预落库：创建主问题轮次拿 DB 主键，随 QUESTION_END 推送真实 roundId（失败降级为 null，前端业务键兜底）
         PendingRound ctx = pending.remove(sessionId);
         Long roundId = null;
@@ -121,8 +106,8 @@ public class WebSocketStreamEmitter implements StreamEmitter {
                         e);
             }
         }
-        send(
-                session,
+        sessionManager.broadcast(
+                sessionId,
                 WsOutbound.questionEnd(
                         sessionId, roundId, ctx != null ? ctx.seq() : null, fullQuestion));
 
@@ -140,13 +125,9 @@ public class WebSocketStreamEmitter implements StreamEmitter {
                 sessionId,
                 new PendingRound(
                         null, parentSeq, followUpIndex, type != null ? type.name() : null));
-        WebSocketSession session = resolve(sessionId);
-        if (session == null) {
-            return;
-        }
         // roundId 在 chunk 阶段尚未创建，传 null；前端按 followUpType/parentSeq/followUpIndex 创建追问气泡
-        send(
-                session,
+        sessionManager.broadcast(
+                sessionId,
                 WsOutbound.questionStart(
                         sessionId,
                         null,
@@ -158,10 +139,6 @@ public class WebSocketStreamEmitter implements StreamEmitter {
 
     @Override
     public void emitFollowUpEnd(Long sessionId, String fullQuestion) {
-        WebSocketSession session = resolve(sessionId);
-        if (session == null) {
-            return;
-        }
         // 预落库：创建追问轮次拿 DB 主键，随 QUESTION_END 推送真实 roundId（失败降级为 null）
         PendingRound ctx = pending.remove(sessionId);
         Long roundId = null;
@@ -186,24 +163,13 @@ public class WebSocketStreamEmitter implements StreamEmitter {
                         e);
             }
         }
-        send(session, WsOutbound.questionEnd(sessionId, roundId, null, fullQuestion));
+        sessionManager.broadcast(
+                sessionId, WsOutbound.questionEnd(sessionId, roundId, null, fullQuestion));
 
         // FE.11 P8：拿到 roundId 后异步触发 TTS（roundId 为 null 的降级分支跳过）
         if (roundId != null) {
             triggerTts(sessionId, roundId, fullQuestion);
         }
-    }
-
-    /** sessionId 为空或会话不存在/已关闭时返回 null（静默丢弃，不中断节点执行）。 */
-    private WebSocketSession resolve(Long sessionId) {
-        if (sessionId == null) {
-            return null;
-        }
-        WebSocketSession session = sessionManager.getSession(sessionId);
-        if (session == null || !session.isOpen()) {
-            return null;
-        }
-        return session;
     }
 
     /** FE.11 P8：异步触发 TTS 语音合成。TTS 未启用或合成失败时静默降级。 */
@@ -225,16 +191,13 @@ public class WebSocketStreamEmitter implements StreamEmitter {
                             return;
                         }
                         roundService.updateAudio(roundId, result.audioUrl(), result.durationMs());
-                        WebSocketSession session = resolve(sessionId);
-                        if (session != null) {
-                            send(
-                                    session,
-                                    WsOutbound.audioReady(
-                                            sessionId,
-                                            roundId,
-                                            result.audioUrl(),
-                                            result.durationMs()));
-                        }
+                        sessionManager.broadcast(
+                                sessionId,
+                                WsOutbound.audioReady(
+                                        sessionId,
+                                        roundId,
+                                        result.audioUrl(),
+                                        result.durationMs()));
                     } catch (Exception e) {
                         log.warn("TTS 异步合成失败 sessionId={} roundId={}", sessionId, roundId, e);
                     }
@@ -248,19 +211,6 @@ public class WebSocketStreamEmitter implements StreamEmitter {
             return InterviewerPersona.fromString(entity.getPersona());
         } catch (Exception e) {
             return InterviewerPersona.FRIENDLY;
-        }
-    }
-
-    private void send(WebSocketSession session, WsOutbound outbound) {
-        synchronized (session) {
-            try {
-                String json = objectMapper.writeValueAsString(outbound);
-                session.sendMessage(new TextMessage(json));
-            } catch (JsonProcessingException e) {
-                log.warn("WsOutbound 序列化失败 type={}", outbound.type(), e);
-            } catch (IOException e) {
-                log.warn("WebSocket 发送失败 sessionId={}", outbound.sessionId(), e);
-            }
         }
     }
 }

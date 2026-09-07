@@ -7,6 +7,8 @@ import com.aims.core.session.SessionStatus;
 import com.aims.gateway.controller.interview.ProctorConfig;
 import com.aims.gateway.controller.interview.RoundResponse;
 import com.aims.gateway.security.GuestTokenService;
+import com.aims.gateway.ws.WebSocketSessionManager;
+import com.aims.gateway.ws.WsOutbound;
 import com.aims.infra.persistence.entity.InterviewSessionEntity;
 import com.aims.infra.persistence.entity.ProctorEventEntity;
 import com.aims.infra.persistence.service.InterviewRoundService;
@@ -55,6 +57,7 @@ public class InterviewAccessController {
     private final PasswordEncoder passwordEncoder;
     private final StringRedisTemplate redis;
     private final ProctorEventService proctorEventService;
+    private final WebSocketSessionManager sessionManager;
 
     public InterviewAccessController(
             InterviewSessionService sessionService,
@@ -64,7 +67,8 @@ public class InterviewAccessController {
             GuestTokenService guestTokenService,
             PasswordEncoder passwordEncoder,
             StringRedisTemplate redis,
-            ProctorEventService proctorEventService) {
+            ProctorEventService proctorEventService,
+            WebSocketSessionManager sessionManager) {
         this.sessionService = sessionService;
         this.resumeService = resumeService;
         this.positionService = positionService;
@@ -73,6 +77,7 @@ public class InterviewAccessController {
         this.passwordEncoder = passwordEncoder;
         this.redis = redis;
         this.proctorEventService = proctorEventService;
+        this.sessionManager = sessionManager;
     }
 
     @Operation(summary = "查询候选人入口信息", description = "公开接口，无需登录；返回候选人名/岗位/状态等非敏感信息")
@@ -115,6 +120,21 @@ public class InterviewAccessController {
                                 })
                         .toList();
         proctorEventService.saveEvents(sessionId, entities);
+        // 实时广播给管理端观察者（跳过 GUEST 回环）：防作弊监控面板零延迟刷新
+        for (ProctorEventEntity entity : entities) {
+            sessionManager.broadcast(
+                    sessionId,
+                    WsOutbound.proctorEvent(
+                            sessionId,
+                            entity.getEventType(),
+                            entity.getDurationMs() == null
+                                    ? null
+                                    : entity.getDurationMs().intValue(),
+                            entity.getOccurredAt() == null
+                                    ? null
+                                    : entity.getOccurredAt().toString()),
+                    WebSocketSessionManager.ROLE_GUEST);
+        }
         return Result.ok(null);
     }
 

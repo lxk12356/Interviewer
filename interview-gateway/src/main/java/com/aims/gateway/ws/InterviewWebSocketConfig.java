@@ -113,14 +113,19 @@ public class InterviewWebSocketConfig implements WebSocketConfigurer {
                     }
                 }
 
-                // 入口模式互斥校验
+                // 入口模式互斥校验：CANDIDATE_ONLY 下管理端以 OBSERVER 旁路观察（不参与锁/答题，收实时广播）
                 if (pathSid != null) {
                     InterviewSessionEntity entity = sessionService.getById(pathSid);
                     String accessMode = entity.getAccessMode();
                     if ("CANDIDATE_ONLY".equals(accessMode)) {
                         if (!isGuest) {
-                            log.warn("WebSocket 握手拒绝: 会话已设为仅候选端，管理端不可连接 sessionId={}", pathSid);
-                            return false;
+                            attributes.put("role", WebSocketSessionManager.ROLE_OBSERVER);
+                            attributes.put("username", claims.getSubject());
+                            log.info(
+                                    "WebSocket 握手成功(观察者): username={} sessionId={}",
+                                    claims.getSubject(),
+                                    pathSid);
+                            return true;
                         }
                     } else {
                         // NONE / DISABLED：仅管理端可连

@@ -648,7 +648,8 @@
     "validation": {
       "resumeRequired": "請選擇候選人簡歷",
       "positionRequired": "請選擇面試崗位"
-    }
+    },
+    "observerMode": "觀察模式"
   },
   "rag": {
     "title": "RAG 檢索",
@@ -748,7 +749,8 @@
     "eventFaceLost": "人臉離鏡",
     "eventUnknown": "其他",
     "empty": "暫無防作弊事件",
-    "totalOffFocusLabel": "累計偏離時長"
+    "totalOffFocusLabel": "累計偏離時長",
+    "liveActivity": "最近動態"
   },
   "monitor": {
     "subtitle": "AI 成本 / 延遲 / 節點耗時即時監控",

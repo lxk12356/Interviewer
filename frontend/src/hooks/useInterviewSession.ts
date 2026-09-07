@@ -84,6 +84,18 @@ export function useInterviewSession({ sessionId, token }: UseInterviewSessionOpt
           store.addSystem('COMPLETED', msg.finishedBy, msg.finishReason);
           break;
 
+        case 'PROCTOR_EVENT':
+          if (msg.eventType) {
+            store.addProctorEvent({
+              id: Date.now(),
+              eventType: msg.eventType,
+              occurredAt: msg.occurredAt ?? new Date().toISOString(),
+              durationMs: msg.durationMs ?? null,
+              detail: null,
+            });
+          }
+          break;
+
         case 'ERROR':
           store.setError(msg.message || i18n.t('errors.interviewServiceError'));
           break;
