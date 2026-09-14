@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Check } from 'lucide-react';
 import { GlassCard } from '@/components/ui/glass-card';
 import { cn } from '@/lib/utils';
 import type { InterviewPlan } from '@/types/interview';
@@ -8,7 +9,7 @@ interface RoundTimelineProps {
   currentRoundId: number | null;
 }
 
-/** 轮次时间线：展示预期轮次进度 */
+/** 轮次进度追踪：已完成轮次对勾 / 进行中高亮 / 未开始灰色，轮次切换时自动更新。 */
 export function RoundTimeline({ planJson, currentRoundId }: RoundTimelineProps) {
   const { t } = useTranslation();
   let questions: { questionId: string; topic: string }[] = [];
@@ -48,27 +49,41 @@ export function RoundTimeline({ planJson, currentRoundId }: RoundTimelineProps) 
               {i < questions.length - 1 && (
                 <div className="absolute left-[3px] top-3 h-full w-px bg-surface-hover" />
               )}
-              {/* 节点：实心点(已回答) / 脉动点(进行中) / 空心点(未开始) */}
+              {/* 节点：对勾(已完成) / 高亮(进行中) / 空心(未开始) */}
               <div
                 className={cn(
-                  'absolute left-0 top-1.5 h-2 w-2 rounded-full border',
-                  isAnswered && 'border-silver-300 bg-silver-300',
+                  'absolute left-0 top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border transition-all',
+                  isAnswered && 'border-success bg-success',
                   isInProgress &&
-                    'border-silver-200 bg-silver-200 animate-pulse-slow',
+                    'border-silver-200 bg-silver-200 shadow-[0_0_10px_var(--shadow-glow)] animate-pulse-slow',
                   !isAnswered &&
                     !isInProgress &&
                     'border-border-strong bg-transparent',
                 )}
-              />
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Q{roundId}</span>
+              >
+                {isAnswered && <Check className="h-2.5 w-2.5 text-space-900" strokeWidth={3.5} />}
+              </div>
+              <div
+                className={cn(
+                  'flex items-center gap-2 rounded-md px-1.5 py-1 transition-all',
+                  isInProgress && 'bg-surface-hover',
+                )}
+              >
+                <span
+                  className={cn(
+                    'text-xs tabular-nums',
+                    isInProgress ? 'text-silver-200' : 'text-text-muted',
+                  )}
+                >
+                  Q{roundId}
+                </span>
                 <span
                   className={cn(
                     'text-sm',
                     isAnswered
                       ? 'text-text-primary'
                       : isInProgress
-                        ? 'text-silver-200'
+                        ? 'font-medium text-silver-100'
                         : 'text-text-muted',
                   )}
                 >

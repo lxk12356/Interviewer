@@ -648,7 +648,8 @@
     "validation": {
       "resumeRequired": "Please select a candidate resume",
       "positionRequired": "Please select an interview position"
-    }
+    },
+    "observerMode": "Observer"
   },
   "rag": {
     "title": "RAG Search",
@@ -748,7 +749,8 @@
     "eventFaceLost": "Face lost",
     "eventUnknown": "Other",
     "empty": "No proctoring events yet",
-    "totalOffFocusLabel": "Total off-focus time"
+    "totalOffFocusLabel": "Total off-focus time",
+    "liveActivity": "Recent Activity"
   },
   "monitor": {
     "subtitle": "Real-time AI cost / latency / node duration monitoring",

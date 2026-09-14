@@ -119,6 +119,7 @@ export interface WsServerMessage {
     | 'SESSION_COMPLETED'
     | 'HEARTBEAT_ACK'
     | 'AUDIO_READY'
+    | 'PROCTOR_EVENT'
     | 'ERROR';
   sessionId?: number;
   roundId?: number;
@@ -134,6 +135,9 @@ export interface WsServerMessage {
   durationMs?: number;
   finishedBy?: string | null;
   finishReason?: string | null;
+  /** PROCTOR_EVENT 字段（实时防作弊广播） */
+  eventType?: string;
+  occurredAt?: string | null;
 }
 
 /** 聊天消息 */

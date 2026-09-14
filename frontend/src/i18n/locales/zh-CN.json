@@ -648,7 +648,8 @@
     "validation": {
       "resumeRequired": "请选择候选人简历",
       "positionRequired": "请选择面试岗位"
-    }
+    },
+    "observerMode": "观察模式"
   },
   "rag": {
     "title": "RAG 检索",
@@ -748,7 +749,8 @@
     "eventFaceLost": "人脸离屏",
     "eventUnknown": "其他",
     "empty": "暂无防作弊事件",
-    "totalOffFocusLabel": "累计偏离时长"
+    "totalOffFocusLabel": "累计偏离时长",
+    "liveActivity": "最近动态"
   },
   "monitor": {
     "subtitle": "AI 成本 / 延迟 / 节点耗时实时监控",

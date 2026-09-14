@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+import { Eye } from 'lucide-react';
 import { GlassCard } from '@/components/ui/glass-card';
-import { SilverButton } from '@/components/ui/silver-button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-dot';
 import { PageHeader, ErrorState } from '@/components/common/PageHeader';
@@ -12,6 +12,8 @@ import { MessageTimeline } from '@/components/chat/MessageTimeline';
 import { AnswerInput } from '@/components/chat/AnswerInput';
 import { DisconnectOverlay } from '@/components/chat/DisconnectOverlay';
 import { ActionButtons } from '@/components/interview/ActionButtons';
+import { RoundTimeline } from '@/components/interview/RoundTimeline';
+import { ProctorMonitorPanel } from '@/components/interview/ProctorMonitorPanel';
 import { useInterview, useInterviewRounds, useResumeInterview } from '@/api/interview';
 import { useInterviewSession } from '@/hooks/useInterviewSession';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -34,6 +36,7 @@ export function InterviewRoomPage() {
   const addQuestion = useSessionStore((s) => s.addQuestion);
   const addAnswer = useSessionStore((s) => s.addAnswer);
   const addSystem = useSessionStore((s) => s.addSystem);
+  const proctorEvents = useSessionStore((s) => s.proctorEvents);
   const queryClient = useQueryClient();
   const { connect, disconnect } = session;
 
@@ -115,77 +118,77 @@ export function InterviewRoomPage() {
     );
   }
 
-  // CANDIDATE_ONLY 模式：管理端无法进入面试间
-  if (interview.accessMode === 'CANDIDATE_ONLY') {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title={t('interviews.roomTitle')}
-          subtitle={t('interviews.interviewIdSubtitle', { id: interview.id })}
-          action={
-            <SilverButton variant="ghost" onClick={() => navigate(`/interviews/${interview.id}`)}>
-              {t('interviews.backToConsole')}
-            </SilverButton>
-          }
-        />
-        <GlassCard className="p-8 text-center">
-          <p className="text-sm text-amber-400">{t('interviews.roomCandidateOnlyTitle')}</p>
-          <p className="mt-2 text-xs text-text-muted">
-            {t('interviews.roomCandidateOnlyHint')}
-          </p>
-        </GlassCard>
-      </div>
-    );
-  }
-
+  // CANDIDATE_ONLY 模式：管理端以观察者进入（WS 旁路，实时看轮次进度与防作弊）
+  const isObserver = interview.accessMode === 'CANDIDATE_ONLY';
   const status = session.status;
   const isTerminal = ['COMPLETED', 'CANCELLED', 'FAILED'].includes(status);
 
   return (
-    <div className="relative flex h-[calc(100vh-7.5rem)] flex-col gap-4">
-      {/* 顶部栏：返回控制台 + 面试间 #id + 状态 + 操作按钮 */}
-      <GlassCard className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate(`/interviews/${interview.id}`)}
-            className="text-xs text-silver-300 hover:text-silver-100 transition-colors"
-          >
-            {t('interviews.backToConsoleShort')}
-          </button>
-          <span className="text-sm font-medium text-text-primary">
-            {t('interviews.roomIdLabel', { id: interview.id })}
-          </span>
-          <StatusBadge status={status} />
-        </div>
-        <ActionButtons
-          status={status}
-          onCancel={() => session.cancelInterview()}
-          onPause={() => session.pauseInterview()}
-          onFinish={() => session.finishInterview()}
-          onResume={handleResume}
-          onBack={() => navigate(`/interviews/${interview.id}`)}
-        />
-      </GlassCard>
+    <div className="flex h-[calc(100vh-7.5rem)] flex-col gap-4 lg:flex-row">
+      {/* 左侧：顶部栏 + 消息时间线 + 回答输入（观察模式下无控制/答题） */}
+      <div className="relative flex min-h-0 flex-1 flex-col gap-4">
+        <GlassCard className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate(`/interviews/${interview.id}`)}
+              className="text-xs text-silver-300 hover:text-silver-100 transition-colors"
+            >
+              {t('interviews.backToConsoleShort')}
+            </button>
+            <span className="text-sm font-medium text-text-primary">
+              {t('interviews.roomIdLabel', { id: interview.id })}
+            </span>
+            <StatusBadge status={status} />
+            {isObserver && (
+              <span className="flex items-center gap-1 rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-muted">
+                <Eye className="h-3 w-3" />
+                {t('interviews.observerMode')}
+              </span>
+            )}
+          </div>
+          {!isObserver && (
+            <ActionButtons
+              status={status}
+              onCancel={() => session.cancelInterview()}
+              onPause={() => session.pauseInterview()}
+              onFinish={() => session.finishInterview()}
+              onResume={handleResume}
+              onBack={() => navigate(`/interviews/${interview.id}`)}
+            />
+          )}
+        </GlassCard>
 
-      {/* 消息时间线 */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <MessageTimeline messages={session.messages} />
+        {/* 消息时间线 */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <MessageTimeline messages={session.messages} />
+        </div>
+
+        {/* 回答输入区（观察模式隐藏） */}
+        {!isObserver && (
+          <AnswerInput
+            onSend={session.submitAnswer}
+            disabled={session.isStreaming || status !== 'IN_PROGRESS'}
+          />
+        )}
+
+        {/* 断线遮罩 */}
+        {!session.isConnected && !isTerminal && (
+          <DisconnectOverlay
+            retryCount={session.retryCount}
+            maxRetries={3}
+            onReconnect={session.reconnect}
+          />
+        )}
       </div>
 
-      {/* 回答输入区 */}
-      <AnswerInput
-        onSend={session.submitAnswer}
-        disabled={session.isStreaming || status !== 'IN_PROGRESS'}
-      />
-
-      {/* 断线遮罩 */}
-      {!session.isConnected && !isTerminal && (
-        <DisconnectOverlay
-          retryCount={session.retryCount}
-          maxRetries={3}
-          onReconnect={session.reconnect}
+      {/* 右侧：轮次进度追踪 + 防作弊实时监控 */}
+      <aside className="w-full shrink-0 space-y-4 overflow-y-auto lg:w-80">
+        <RoundTimeline
+          planJson={interview.planJson}
+          currentRoundId={session.currentRoundId}
         />
-      )}
+        <ProctorMonitorPanel events={proctorEvents} />
+      </aside>
     </div>
   );
 }

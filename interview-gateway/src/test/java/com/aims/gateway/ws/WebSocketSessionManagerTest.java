@@ -26,7 +26,7 @@ class WebSocketSessionManagerTest {
 
     @BeforeEach
     void setUp() {
-        manager = new WebSocketSessionManager();
+        manager = new WebSocketSessionManager(new com.fasterxml.jackson.databind.ObjectMapper());
     }
 
     @Test

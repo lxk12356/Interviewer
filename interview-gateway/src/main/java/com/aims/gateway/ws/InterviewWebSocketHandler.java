@@ -161,6 +161,17 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        // 观察者（管理端旁路）：不抢锁、不触发 Engine 恢复，仅接收实时广播（轮次/防作弊）
+        boolean isObserver =
+                WebSocketSessionManager.ROLE_OBSERVER.equals(session.getAttributes().get("role"));
+        if (isObserver) {
+            session.getAttributes().put(ATTR_SESSION_ID, sessionId);
+            sessionManager.register(sessionId, session);
+            log.info("观察者连接建立 sessionId={}", sessionId);
+            send(session, WsOutbound.sessionReady(sessionId, entity.getStatus()));
+            return;
+        }
+
         // 生成连接 ID 并尝试获取连接锁（连接 ID 附身份后缀，供同身份抢占判断）
         String identity = buildIdentity(session);
         String connectionId = UUID.randomUUID().toString() + "|" + identity;
@@ -279,8 +290,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                     case FINISHED -> {
                         // Engine 已触发评估，推送 EVALUATING 状态
                         log.info("重连时面试已结束，进入评估 sessionId={}", sessionId);
-                        send(
-                                session,
+                        sessionManager.broadcast(
+                                sessionId,
                                 WsOutbound.status(sessionId, SessionStatus.EVALUATING.name()));
                     }
                     case RESUMED, REBUILT_FROM_DB -> {
@@ -311,7 +322,9 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                         sessionId,
                         answeredCount);
                 if (triggerEvaluation(sessionId)) {
-                    send(session, WsOutbound.status(sessionId, SessionStatus.EVALUATING.name()));
+                    sessionManager.broadcast(
+                            sessionId,
+                            WsOutbound.status(sessionId, SessionStatus.EVALUATING.name()));
                 }
             } else {
                 // 补发下一题
@@ -435,6 +448,17 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
         }
 
         log.debug("收到 WebSocket 消息 sessionId={} type={}", sessionId, inbound.type());
+
+        // 观察者只读：仅响应心跳，忽略控制类消息（答题/暂停/结束等）
+        boolean isObserver =
+                WebSocketSessionManager.ROLE_OBSERVER.equals(session.getAttributes().get("role"));
+        if (isObserver) {
+            if (inbound.isType("HEARTBEAT")) {
+                handleHeartbeat(session, sessionId);
+            }
+            return;
+        }
+
         try {
             if (inbound.isType("START")) {
                 send(
@@ -476,6 +500,13 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         Long sessionId = (Long) session.getAttributes().get(ATTR_SESSION_ID);
         String connectionId = (String) session.getAttributes().get(ATTR_CONNECTION_ID);
+
+        // 观察者：无连接锁，仅注销连接映射，不触发断线暂停
+        if (sessionId != null && connectionId == null) {
+            sessionManager.unregister(sessionId, session);
+            log.info("观察者连接关闭 sessionId={} status={}", sessionId, status);
+            return;
+        }
         if (sessionId == null || connectionId == null) {
             return;
         }
@@ -640,7 +671,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
         int totalRounds = getTotalRounds(entity);
         if (totalRounds > 0 && answeredCount >= totalRounds) {
             if (triggerEvaluation(sessionId)) {
-                send(session, WsOutbound.status(sessionId, SessionStatus.EVALUATING.name()));
+                sessionManager.broadcast(
+                        sessionId, WsOutbound.status(sessionId, SessionStatus.EVALUATING.name()));
                 log.info("达到题数上限，进入评估流程 sessionId={} answeredCount={}", sessionId, answeredCount);
             }
         } else {
@@ -696,8 +728,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             String finisher = resolveFinisher(session);
             recordFinishQuietly(sessionId, finisher, "MANUAL_FINISH");
             // 通知前端进入评估状态，并透传结束原因用于回执
-            send(
-                    session,
+            sessionManager.broadcast(
+                    sessionId,
                     WsOutbound.status(
                             sessionId, SessionStatus.EVALUATING.name(), finisher, "MANUAL_FINISH"));
             log.info("面试结束，进入评估流程 sessionId={}", sessionId);
@@ -813,8 +845,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             engine.finishInterview(sessionId);
             String finisher = resolveFinisher(session);
             recordFinishQuietly(sessionId, finisher, "MANUAL_FINISH");
-            send(
-                    session,
+            sessionManager.broadcast(
+                    sessionId,
                     WsOutbound.status(
                             sessionId, SessionStatus.EVALUATING.name(), finisher, "MANUAL_FINISH"));
             log.info("面试已结束，进入评估（Engine）sessionId={}", sessionId);

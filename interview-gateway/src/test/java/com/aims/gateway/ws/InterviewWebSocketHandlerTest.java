@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -276,10 +277,12 @@ class InterviewWebSocketHandlerTest {
 
         verify(engine).resumeInterview(32L);
         verify(roundService, never()).countAnswered(anyLong());
-        // 最后一条消息为 STATUS(EVALUATING)
-        ObjectNode last = lastSent();
-        assertEquals("STATUS", last.get("type").asText());
-        assertEquals("EVALUATING", last.get("status").asText());
+        // 结束状态经 sessionManager.broadcast 推送（观察者同步收），最后一条为 STATUS(EVALUATING)
+        ArgumentCaptor<WsOutbound> captor = ArgumentCaptor.forClass(WsOutbound.class);
+        verify(sessionManager).broadcast(eq(32L), captor.capture(), new String[0]);
+        WsOutbound last = captor.getValue();
+        assertEquals("STATUS", last.type());
+        assertEquals("EVALUATING", last.status());
     }
 
     @Test

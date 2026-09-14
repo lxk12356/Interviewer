@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -39,12 +40,12 @@ import org.springframework.web.socket.WebSocketSession;
 /**
  * {@link WebSocketStreamEmitter} 测试：验证 emitEnd/emitFollowUpEnd 预落库并随 QUESTION_END 推送真实 roundId。
  *
- * <p>覆盖：主问题/追问创建轮次、参数传递、创建失败降级 roundId=null。
+ * <p>Emiter 经真实 {@link WebSocketSessionManager} 广播送达注册的 mock session，覆盖主问题/追问创建轮次、 参数传递、创建失败降级
+ * roundId=null。
  */
 @ExtendWith(MockitoExtension.class)
 class WebSocketStreamEmitterTest {
 
-    @Mock private WebSocketSessionManager sessionManager;
     @Mock private WebSocketSession session;
     @Mock private InterviewRoundService roundService;
     @Mock private ObjectProvider<TtsService> ttsServiceProvider;
@@ -52,12 +53,16 @@ class WebSocketStreamEmitterTest {
     @Mock private TtsService ttsService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private WebSocketSessionManager sessionManager;
     private WebSocketStreamEmitter emitter;
 
     @BeforeEach
     void setUp() {
-        when(sessionManager.getSession(1L)).thenReturn(session);
-        when(session.isOpen()).thenReturn(true);
+        // 真实 SessionManager（broadcast 语义）：注册 mock session 接收广播消息
+        sessionManager = new WebSocketSessionManager(objectMapper);
+        sessionManager.register(1L, session);
+        // 部分用例经 broadcast 检查 isOpen，部分（无连接用例）不检查，用 lenient 避免误报
+        lenient().when(session.isOpen()).thenReturn(true);
         emitter =
                 new WebSocketStreamEmitter(
                         sessionManager,
@@ -67,7 +72,7 @@ class WebSocketStreamEmitterTest {
                         sessionService);
     }
 
-    /** 取最后一次发送的 WS 消息并解析为 JSON。 */
+    /** 取最后一次广播到达 session 的 WS 消息并解析为 JSON。 */
     private JsonNode lastSent() throws Exception {
         ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, atLeastOnce()).sendMessage(captor.capture());
@@ -216,5 +221,14 @@ class WebSocketStreamEmitterTest {
         // roundId=null -> triggerTts 不被调用，getIfAvailable 与 synthesize 均不触发
         verify(ttsServiceProvider, never()).getIfAvailable();
         verify(ttsService, never()).synthesize(anyString(), any(InterviewerPersona.class));
+    }
+
+    @Test
+    @DisplayName("broadcast：无活跃连接时静默丢弃，不抛异常")
+    void broadcast_noActiveSession_silentlyDrops() {
+        // 未注册 sessionId=9 的连接，调用应无副作用
+        emitter.emitStart(9L, 1);
+        emitter.emit(9L, "chunk");
+        emitter.emitEnd(9L, "问题");
     }
 }

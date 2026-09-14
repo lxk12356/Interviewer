@@ -19,7 +19,9 @@ public record WsOutbound(
         String audioUrl,
         Integer durationMs,
         String finishedBy,
-        String finishReason) {
+        String finishReason,
+        String eventType,
+        String occurredAt) {
 
     public static WsOutbound sessionReady(Long sessionId, String status) {
         return new WsOutbound(
@@ -37,6 +39,8 @@ public record WsOutbound(
                 null,
                 null,
                 null,
+                null,
+                null,
                 null);
     }
 
@@ -46,6 +50,8 @@ public record WsOutbound(
                 sessionId,
                 roundId,
                 seq,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -82,6 +88,8 @@ public record WsOutbound(
                 null,
                 null,
                 null,
+                null,
+                null,
                 null);
     }
 
@@ -97,6 +105,8 @@ public record WsOutbound(
                 null,
                 null,
                 text,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -120,6 +130,8 @@ public record WsOutbound(
                 null,
                 null,
                 null,
+                null,
+                null,
                 null);
     }
 
@@ -128,6 +140,8 @@ public record WsOutbound(
                 "ANSWER_ACK",
                 sessionId,
                 roundId,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -164,13 +178,17 @@ public record WsOutbound(
                 null,
                 null,
                 finishedBy,
-                finishReason);
+                finishReason,
+                null,
+                null);
     }
 
     public static WsOutbound heartbeatAck(Long sessionId) {
         return new WsOutbound(
                 "HEARTBEAT_ACK",
                 sessionId,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -207,13 +225,15 @@ public record WsOutbound(
                 null,
                 null,
                 finishedBy,
-                finishReason);
+                finishReason,
+                null,
+                null);
     }
 
     public static WsOutbound error(int code, String message) {
         return new WsOutbound(
                 "ERROR", null, null, null, null, null, null, code, message, null, null, null, null,
-                null, null);
+                null, null, null, null);
     }
 
     /** TTS 音频合成完成通知。 */
@@ -234,6 +254,35 @@ public record WsOutbound(
                 audioUrl,
                 durationMs,
                 null,
+                null,
+                null,
                 null);
+    }
+
+    /**
+     * 防作弊事件实时广播（管理端监控面板用；广播时排除 GUEST 身份回环）。
+     *
+     * <p>前端以 {@code text}（eventType）与 {@code durationMs}/{@code occurredAt} 聚合实时数值。
+     */
+    public static WsOutbound proctorEvent(
+            Long sessionId, String eventType, Integer durationMs, String occurredAt) {
+        return new WsOutbound(
+                "PROCTOR_EVENT",
+                sessionId,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                durationMs,
+                null,
+                null,
+                eventType,
+                occurredAt);
     }
 }

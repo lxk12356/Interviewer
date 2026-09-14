@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SessionStatus, ChatMessage } from '@/types/interview';
+import type { SessionStatus, ChatMessage, ProctorEvent } from '@/types/interview';
 
 /** 面试会话状态管理 */
 interface SessionStore {
@@ -9,6 +9,7 @@ interface SessionStore {
   currentQuestion: string;
   isStreaming: boolean;
   messages: ChatMessage[];
+  proctorEvents: ProctorEvent[];
   isConnected: boolean;
   retryCount: number;
   error: string | null;
@@ -24,6 +25,7 @@ interface SessionStore {
   addQuestion: (roundId: number | undefined, seq: number | undefined, text: string, followUpType?: string, parentSeq?: number, followUpIndex?: number) => void;
   setAudio: (roundId: number, audioUrl: string, durationMs?: number) => void;
   hasRound: (roundId: number) => boolean;
+  addProctorEvent: (event: ProctorEvent) => void;
   setConnected: (connected: boolean) => void;
   incrementRetry: () => void;
   resetRetry: () => void;
@@ -38,6 +40,7 @@ const initialState = {
   currentQuestion: '',
   isStreaming: false,
   messages: [] as ChatMessage[],
+  proctorEvents: [] as ProctorEvent[],
   isConnected: false,
   retryCount: 0,
   error: null as string | null,
@@ -45,6 +48,9 @@ const initialState = {
 
 let messageSeq = 0;
 const nextId = () => `msg-${++messageSeq}`;
+
+/** 防作弊事件最大保留条数（前端实时面板仅展示最近事件） */
+const MAX_PROCTOR_EVENTS = 50;
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   ...initialState,
@@ -97,7 +103,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         return state;
       }
       return {
-        currentRoundId: roundId ?? null,
+        currentRoundId: roundId ?? state.currentRoundId,
         currentQuestion: '',
         isStreaming: true,
         messages: [
@@ -217,6 +223,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   hasRound: (roundId) =>
     get().messages.some((m) => m.role === 'question' && m.roundId === roundId),
+
+  addProctorEvent: (event) =>
+    set((state) => ({
+      proctorEvents: [...state.proctorEvents, event].slice(-MAX_PROCTOR_EVENTS),
+    })),
 
   setConnected: (connected) =>
     set(connected ? { isConnected: true, retryCount: 0 } : { isConnected: false }),
