@@ -1,7 +1,8 @@
-package com.aims.gateway.security;
+package com.aims.gateway.config;
 
 import com.aims.core.common.ErrorCode;
 import com.aims.core.common.Result;
+import com.aims.gateway.security.JwtAuthFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

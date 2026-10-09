@@ -78,7 +78,9 @@ services:
     restart: "no"
 
   minio:
-    image: minio/minio:latest
+    # 注意：MinIO 官方已从 Docker Hub 下架 minio/minio:latest 与 minio/mc:latest，
+    # 拉取会报 "pull access denied"。此处改用固定版本；该镜像自带 mc，minio-init 复用同一镜像。
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     container_name: aims-minio-wzxg
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -96,7 +98,7 @@ services:
       retries: 12
 
   minio-init:
-    image: minio/mc:latest
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     container_name: aims-minio-init-wzxg
     depends_on:
       minio:

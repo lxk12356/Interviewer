@@ -18,25 +18,27 @@ public class PositionEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
-    private String title;
+    private String title;//岗位名称，如「Java 后端开发工程师」
 
-    private String department;
+    private String department;//部门，可以为空
 
     @TableField("jd_text")
-    private String jdText;
+    private String jdText;//JD 原文。这是整个岗位模块的核心——它同时是"给 AI 看的岗位描述"和向量化的输入源
 
     @TableField("requirements_json")
-    private String requirementsJson;
+    private String requirementsJson;//预留字段，用来后续做更精确的匹配,现在相关功能还没有开发呢
 
-    private String status;
+
+
+    private String status;//ACTIVE(启用) / INACTIVE(停用)，枚举 PositionStatus。建了 btree 索引
 
     /** pgvector 类型，不参与 MyBatis-Plus 自动映射。 */
     @TableField(exist = false)
-    private String embedding;
+    private String embedding;//在表里没有
 
     /** 查询时由 Service 填充，表示是否已有向量。 */
     @TableField(exist = false)
-    private Boolean hasEmbedding;
+    private Boolean hasEmbedding;//纯内存字段，不是数据库字段
 
     @TableField(value = "created_at", fill = FieldFill.INSERT)
     private Instant createdAt;

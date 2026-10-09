@@ -1,5 +1,4 @@
 package com.aims.gateway.controller.interview;
-
 import com.aims.agent.InterviewPlanGenerator;
 import com.aims.core.common.ErrorCode;
 import com.aims.core.common.Result;
@@ -115,6 +114,13 @@ public class InterviewController {
         this.proctorEventService = proctorEventService;
     }
 
+    /**
+     * @author LXK
+     * @param page
+     * @param size
+     * @param status
+     * @return
+     */
     @Operation(summary = "分页查询面试会话列表")
     @GetMapping("")
     public Result<IPage<InterviewResponse>> list(
@@ -126,7 +132,8 @@ public class InterviewController {
         return Result.ok(mapped);
     }
 
-    @Operation(summary = "创建面试会话", description = "创建面试会话（入参简历 ID），状态默认为 CREATED（不自动生成候选人链接）")
+    @Operation(summary = "创建面试会话，这里只需要四个字段，简历id,岗位id,必须要，其他两个面试性格和accessps可以不传",
+        description = "创建面试会话（入参简历 ID），状态默认为 CREATED（不自动生成候选人链接）")
     @PostMapping("")
     public Result<InterviewResponse> create(@Valid @RequestBody CreateInterviewRequest req) {
         // 岗位必填校验（前端已必选，此处防御绕过前端直接调 API 的场景）

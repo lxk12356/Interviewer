@@ -27,9 +27,10 @@ public final class PgVectorSupport {
         }
         sb.append(']');
         return sb.toString();
-    }
+    }//这里是将向量转换成字符串了
 
     /** 将 pgvector 查询结果字符串解析为 float[]。 pgvector 返回格式如 "[0.1,0.2,0.3]"。 */
+    //这里就是将字符串转化成向量数组float[]
     public static float[] fromVectorString(String vectorStr) {
         if (vectorStr == null || vectorStr.isBlank()) {
             return null;

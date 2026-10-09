@@ -22,18 +22,18 @@ public class ResumeEntity {
     private Long id;
 
     @TableField("candidate_name")
-    private String candidateName;
+    private String candidateName;//候选人姓名其实，也就是简历对应的人
 
     /** v1.1-C：指向 candidate 表（TD2 语义归位）。 */
     @TableField("candidate_id")
-    private Long candidateId;
+    private Long candidateId;//对应候选人的id，外键
 
-    private String phone;
+    private String phone;//手机号
 
-    private String email;
+    private String email;//邮件号
 
     @TableField("raw_text")
-    private String rawText;
+    private String rawText;//关键词检索（建了 trgm 索引），也是向量化的输入源
 
     /** {@link com.aims.core.resume.ParsedResume} 的 JSON 字符串。 */
     @TableField(
@@ -43,46 +43,48 @@ public class ResumeEntity {
     private String parsedJson;
 
     @TableField("file_url")
-    private String fileUrl;
+    private String fileUrl;//minIO地址
 
+
+    //AI把简历转成JSON的过程parse,将JSON向量化的过程embedding
     @TableField("parse_status")
-    private String parseStatus;
+    private String parseStatus;//状态机：PENDING→PROCESSING→PARSED/FAILED
 
     @TableField("embedding_status")
-    private String embeddingStatus;
+    private String embeddingStatus;//状态机：PENDING→PROCESSING→PARSED/FAILED
 
-    @TableField("parse_error")
+    @TableField("parse_error")//失败原因
     private String parseError;
 
     @TableField("embedding_error")
-    private String embeddingError;
+    private String embeddingError;//原因
 
     @TableField("parse_attempts")
-    private Integer parseAttempts;
+    private Integer parseAttempts;//尝试次数
 
-    @TableField("embedding_attempts")
+    @TableField("embedding_attempts")//尝试次数
     private Integer embeddingAttempts;
 
-    @TableField("parsed_at")
+    @TableField("parsed_at")//成功解析的时间
     private Instant parsedAt;
 
-    @TableField("embedded_at")
+    @TableField("embedded_at")//成功解析的时间
     private Instant embeddedAt;
 
-    @TableField("embedding_model")
+    @TableField("embedding_model")//向量化采用的模型
     private String embeddingModel;
 
-    @TableField("embedding_dimension")
+    @TableField("embedding_dimension")//向量维度
     private Integer embeddingDimension;
 
     /** pgvector 向量字段，MyBatis-Plus 不自动映射，通过自定义 SQL 读写。 */
     @TableField(exist = false)
-    private String embedding;
+    private String embedding;//向量
 
-    @TableField("created_at")
+    @TableField("created_at")//
     private Instant createdAt;
 
-    @TableField("updated_at")
+    @TableField("updated_at")//
     private Instant updatedAt;
 
     public Long getId() {

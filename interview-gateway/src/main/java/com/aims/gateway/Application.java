@@ -1,5 +1,4 @@
 package com.aims.gateway;
-
 import com.aims.core.common.TraceContext;
 import org.slf4j.MDC;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration;

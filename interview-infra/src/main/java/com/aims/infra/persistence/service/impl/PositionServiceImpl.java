@@ -51,6 +51,8 @@ public class PositionServiceImpl extends ServiceImpl<PositionMapper, PositionEnt
     }
 
     @Override
+    //todo
+    //岗位更新的时候需要重算向量,这里是没有做的，向量化只向量化了jdtext,然后将这个向量和岗位id关联了起来
     public PositionEntity update(Long id, UpdatePositionRequest req) {
         PositionEntity entity = getById(id);
         if (req.title() != null) {
@@ -117,7 +119,7 @@ public class PositionServiceImpl extends ServiceImpl<PositionMapper, PositionEnt
         if (jdText == null || jdText.isBlank()) {
             throw new BizException(ErrorCode.PARAM_INVALID, "岗位 JD 为空，无法向量化: " + id);
         }
-        float[] embedding = modelRouter.embed(jdText);
+        float[] embedding = modelRouter.embed(jdText);//
         baseMapper.updateEmbedding(id, PgVectorSupport.toVectorString(embedding));
     }
 }

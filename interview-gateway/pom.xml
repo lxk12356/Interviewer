@@ -94,6 +94,10 @@
             <version>1.4.3</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.aims</groupId>
+            <artifactId>interview-core</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
