@@ -5,10 +5,10 @@ import java.util.List;
 
 /** 结构化面试计划。 */
 public record InterviewPlan(
-        String candidateName,
-        String position,
-        List<PlanSection> sections,
-        List<PlannedQuestion> questions,
+        String candidateName,//候选人姓名
+        String position,//职位
+        List<PlanSection> sections,//面试计划中的模块列表，这个PlanSection里面有目标，题目数量，和这个模块的名字
+        List<PlannedQuestion> questions,//面试计划题目
         int estimatedMinutes,
         String version)
         implements Serializable {

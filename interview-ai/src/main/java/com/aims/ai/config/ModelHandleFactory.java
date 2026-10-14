@@ -33,9 +33,9 @@ public class ModelHandleFactory {
 
     private static final Logger log = LoggerFactory.getLogger(ModelHandleFactory.class);
 
-    private final LoggingAdvisor loggingAdvisor;
-    private final TokenMeterAdvisor tokenMeterAdvisor;
-    private final RetryAdvisor retryAdvisor;
+    private final LoggingAdvisor loggingAdvisor;//每一次调用大模型的时候，用于打印日志100
+    private final TokenMeterAdvisor tokenMeterAdvisor;//每一次调用大模型的时候，用于打印日志200
+    private final RetryAdvisor retryAdvisor;//重试日志300
 
     public ModelHandleFactory(
             LoggingAdvisor loggingAdvisor,

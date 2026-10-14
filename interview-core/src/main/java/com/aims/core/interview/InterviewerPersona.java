@@ -11,7 +11,7 @@ public enum InterviewerPersona {
 
     /** 从字符串解析，非法值或 null 返回默认 FRIENDLY。 */
     public static InterviewerPersona fromString(String value) {
-        if (value == null || value.isBlank()) return FRIENDLY;
+        if (value == null || value.isBlank()) return FRIENDLY;//兜底的性格
         try {
             return InterviewerPersona.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException e) {

@@ -15,10 +15,11 @@ import java.util.List;
  * @param recentInterviews 最近 8 条面试摘要（按创建时间倒序）
  */
 public record DashboardStats(
-        List<StatusCount> statusCounts,
-        List<TrendPoint> dailyTrend,
-        ScoreStats scoreStats,
-        List<RecentInterview> recentInterviews) {
+    List<StatusCount> statusCounts,        // ①会话状态数量分布（饼图）
+    List<TrendPoint> dailyTrend,           // ②近30天每日面试创建趋势（折线图）
+    ScoreStats scoreStats,                 // ③面试得分统计：平均分 + 分数区间分布（柱状图）
+    List<RecentInterview> recentInterviews // ④最近8条面试记录摘要（列表）
+)  {
 
     /**
      * 状态分布项。

@@ -37,7 +37,7 @@ public class QuestionController {
     @Operation(summary = "创建题目", description = "保存题干后同步向量化，向量化失败不阻断创建")
     @PostMapping
     public Result<QuestionResponse> create(@Valid @RequestBody CreateQuestionRequest request) {
-        Question question = toDomain(request);
+        Question question = toDomain(request);//领域模型转化
         Question saved = questionService.create(question);
         return Result.ok(toResponse(saved));
     }

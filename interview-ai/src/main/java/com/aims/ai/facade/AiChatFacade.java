@@ -8,6 +8,7 @@ import reactor.core.publisher.Flux;
  * AI 对话统一入口。业务代码（P3 起的 Agent）不直接感知 {@link ModelTier} 映射细节与 Spring AI API， 统一入口便于：Advisor
  * 统一挂载、计量归因、未来降级为纯阻塞调用或替换框架。
  */
+//5种调用方式
 public interface AiChatFacade {
 
     /** 阻塞调用 + 结构化输出（P3 面试计划、P4 评估打分使用）。 */

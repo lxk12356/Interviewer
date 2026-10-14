@@ -8,7 +8,7 @@ import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
-/** 基于 Redis List 的会话记忆实现。 */
+/** 基于 Redis List 的会话记忆实现。会话id conversationId */
 @Component
 public class RedisConversationMemory implements ConversationMemory {
 

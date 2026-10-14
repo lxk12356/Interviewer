@@ -20,6 +20,7 @@ public class DefaultInterviewerAgent implements InterviewerAgent {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultInterviewerAgent.class);
 
+    //如果ai没有生成问题可以使用这个兜底
     /** 兜底问题池（AI 返回空或无计划时使用） */
     private static final List<String> FALLBACK_QUESTIONS =
             List.of(
@@ -35,27 +36,30 @@ public class DefaultInterviewerAgent implements InterviewerAgent {
     /** 重试间隔（毫秒） */
     private static final long RETRY_DELAY_MS = 500;
 
-    private final AiChatFacade aiChatFacade;
+    private final AiChatFacade aiChatFacade;//调用模型
 
     public DefaultInterviewerAgent(AiChatFacade aiChatFacade) {
         this.aiChatFacade = aiChatFacade;
     }
 
+    //实现接口的方法阻塞式纯文本调用
     @Override
     public String nextQuestion(InterviewContext context) {
+        //如果没有计划，或者轮次已经到最大
         if (context.plan() == null || context.currentRound() > context.totalRounds()) {
             return pickFallback(context.recentQuestions());
         }
         InterviewerPersona persona =
                 context.persona() != null ? context.persona() : InterviewerPersona.FRIENDLY;
+
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             String result =
                     aiChatFacade.call(
-                            ModelTier.FLAGSHIP,
-                            InterviewPromptBuilder.interviewerSystem(persona),
-                            InterviewPromptBuilder.interviewerUser(context));
+                            ModelTier.FLAGSHIP,//模型挡位，这个会决定调用什么模型
+                            InterviewPromptBuilder.interviewerSystem(persona),//面试官提示词加上性格提示词System 定规矩
+                            InterviewPromptBuilder.interviewerUser(context));//  User 给事实，这一次的事实与任务，里面有这个InterviewContext
             if (result != null && !result.isBlank()) {
-                return result.trim();
+                return result.trim();//正常情况下走这个直接返回LLM出的一个题目
             }
             log.warn("面试官生成问题为空，attempt={}/{}", attempt + 1, MAX_RETRIES + 1);
             if (attempt < MAX_RETRIES) {
@@ -68,10 +72,13 @@ public class DefaultInterviewerAgent implements InterviewerAgent {
             }
         }
         log.warn("AI 返回空已达最大重试次数，使用兜底问题");
-        return pickFallback(context.recentQuestions());
+        return pickFallback(context.recentQuestions());//兜底的逻辑
     }
 
+
+    //和上面的功能额基本一样，不过是个流式调用
     @Override
+    //异步异步字符串数据流，可以源源不断吐出 0 个、1 个、或者很多个 String 片段，流式吐出来的
     public Flux<String> streamQuestion(InterviewContext context) {
         if (context.plan() == null || context.currentRound() > context.totalRounds()) {
             return Flux.just(pickFallback(context.recentQuestions()));
@@ -98,6 +105,6 @@ public class DefaultInterviewerAgent implements InterviewerAgent {
                         .filter(q -> recentQuestions == null || !recentQuestions.contains(q))
                         .toList();
         List<String> pool = available.isEmpty() ? FALLBACK_QUESTIONS : available;
-        return pool.get(ThreadLocalRandom.current().nextInt(pool.size()));
+        return pool.get(ThreadLocalRandom.current().nextInt(pool.size()));//随机取出来一个兜底问题
     }
 }

@@ -12,13 +12,13 @@ import org.springframework.ai.embedding.EmbeddingModel;
  */
 public final class ModelHandle {
 
-    private final ModelTier tier;
-    private final AiModelProperties.TierConfig config;
-    private final ChatClient chatClient;
-    private final ChatClient fallbackClient;
-    private final String fallbackModel;
-    private final EmbeddingModel embeddingModel;
-    private final Semaphore concurrencyGate;
+    private final ModelTier tier;                     // 模型等级（枚举）
+    private final AiModelProperties.TierConfig config;// 当前等级对应的配置
+    private final ChatClient chatClient;              // 主模型：对话大模型客户端（聊天、问答、面试提问）
+    private final ChatClient fallbackClient;          // 降级备用对话客户端（主模型挂了就切这个）
+    private final String fallbackModel;               // 备用模型名称
+    private final EmbeddingModel embeddingModel;      // 向量模型（用来把文本转向量，做知识库检索）
+    private final Semaphore concurrencyGate;          // 并发闸门，控制同时最多多少请求访问这个模型
 
     private ModelHandle(
             ModelTier tier,

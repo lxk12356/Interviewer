@@ -1,5 +1,6 @@
 package com.aims.ai.advisor;
 
+import jdk.jfr.Description;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClientRequest;
@@ -16,6 +17,7 @@ import reactor.core.publisher.Flux;
  * <p>记录 tier / model / prompt 摘要（截断 500 字符）/ 耗时；<b>不</b>记录完整 prompt， 防止敏感信息泄漏到日志采集。完整 prompt 落库审计留待
  * P4。
  */
+//调用大模型前后记录日志，记录「从发起到最终返回/失败」的完整耗时，包括所有重试的时间。
 public class LoggingAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingAdvisor.class);
@@ -40,7 +42,7 @@ public class LoggingAdvisor implements CallAdvisor, StreamAdvisor {
     @Override
     public int getOrder() {
         return 100;
-    }
+    }//进 100、200、300，出300、200、100
 
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {

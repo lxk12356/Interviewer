@@ -9,7 +9,7 @@ import reactor.core.publisher.Flux;
  */
 public interface InterviewerAgent {
 
-    /** 生成当前轮次问题（阻塞）。 */
+    /** 生成当前轮次问题（阻塞式）。 */
     String nextQuestion(InterviewContext context);
 
     /** 流式生成当前轮次问题。 */

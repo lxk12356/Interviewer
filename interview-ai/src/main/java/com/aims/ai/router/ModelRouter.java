@@ -24,7 +24,7 @@ import reactor.core.publisher.Flux;
 public class ModelRouter {
 
     private static final Logger log = LoggerFactory.getLogger(ModelRouter.class);
-    private static final int DEFAULT_EMBEDDING_DIMENSIONS = 2048;
+    private static final int DEFAULT_EMBEDDING_DIMENSIONS = 2048;//向量维度
 
     /** 句柄工厂：非 null 时支持 {@link #refresh} 热刷新（正常装配路径注入）；单测直建时可省略。 */
     private final ModelHandleFactory factory;

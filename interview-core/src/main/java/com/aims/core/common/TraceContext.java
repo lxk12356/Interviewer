@@ -2,7 +2,8 @@ package com.aims.core.common;
 
 import java.util.function.Supplier;
 
-/** 链路追踪上下文钩子。core 模块不依赖任何日志框架， 由启动模块（gateway）在启动时安装基于 MDC 的实现；P7 接入 OpenTelemetry 后替换为 OTel 实现。 */
+/** 链路追踪上下文钩子。core 模块不依赖任何日志框架，
+ * 由启动模块（gateway）在启动时安装基于 MDC 的实现；P7 接入 OpenTelemetry 后替换为 OTel 实现。 */
 public final class TraceContext {
 
     private static volatile Supplier<String> traceIdSupplier = () -> null;

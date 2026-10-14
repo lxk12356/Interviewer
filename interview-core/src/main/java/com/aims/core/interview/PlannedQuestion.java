@@ -5,11 +5,11 @@ import java.util.List;
 
 /** 面试计划中的一道题。 */
 public record PlannedQuestion(
-        String questionId,
-        String topic,
-        String difficulty,
-        List<String> followUpHints,
-        String evaluationFocus)
+        String questionId,//问题的id
+        String topic,//主题
+        String difficulty,//题目难度
+        List<String> followUpHints, //面试计划里每道题自带的"预设追问方向"清单（List<String>）。它是出题阶段（LLM 生成计划时）就把"这道题打算往哪儿追问"写进计划，几轮之后真正追问时再取出来喂给追问模型。
+        String evaluationFocus)//评价的重点
         implements Serializable {
 
     public PlannedQuestion {

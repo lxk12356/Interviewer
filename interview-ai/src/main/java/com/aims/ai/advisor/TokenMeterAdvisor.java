@@ -27,11 +27,12 @@ import reactor.core.publisher.Flux;
  *
  * <p>R2 兼容：部分 OpenAI 兼容渠道的流式响应不返回 usage，做 null 容忍并告警，不中断调用。
  */
+//放中间：只有真正拿到响应时才计量 token。重试失败的调用没有 token 产出，不该计数。它在重试层之外，所以重试成功后的那一次结果才会被计量到。
 public class TokenMeterAdvisor implements CallAdvisor, StreamAdvisor {
 
     private static final Logger log = LoggerFactory.getLogger(TokenMeterAdvisor.class);
 
-    private final MeterRegistry meterRegistry;
+    private final MeterRegistry meterRegistry;//埋指标（数字统计，用来做监控、告警）
     private final Map<String, AiModelProperties.Pricing> pricing;
 
     public TokenMeterAdvisor(MeterRegistry meterRegistry, AiModelProperties properties) {
