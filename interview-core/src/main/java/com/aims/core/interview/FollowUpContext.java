@@ -9,11 +9,11 @@ public record FollowUpContext(
         Long roundId,
         String question,
         String answer,
-        String candidateName,
+        String candidateName,//候选人姓名
         String positionTitle,
         String jdText,
         String resumeSummary,
-        List<String> followUpHints,
+        List<String> followUpHints,//一般就是跟进提示
         List<String> recentQuestions,
         InterviewerPersona persona) {
 

@@ -21,6 +21,7 @@ import com.aims.infra.persistence.mapper.WorkExperienceMapper;
 import com.aims.infra.persistence.service.ResumeRagService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /** {@link ResumeRagCrossCheckExecutor} F3 实体级比对测试：一致 / 简历未提及 / period 冲突 / 无实体回退全文。 */
@@ -155,6 +156,7 @@ class ResumeRagCrossCheckExecutorTest {
         assertTrue(r.conflictDetails().isEmpty());
     }
 
+    @Disabled("project 校验已弃用（entityCompare 内已注释），恢复 project 维度时一并启用")
     @Test
     void crossCheck_projectMatched_consistent() {
         ProjectExperienceEntity p = new ProjectExperienceEntity();

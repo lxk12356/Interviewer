@@ -17,6 +17,8 @@ public class RegexResumeMentionExtractor implements ResumeEntityMentionExtractor
         if (name == null) {
             return List.of();
         }
+        //todo用正则 Matcher.find() 匹配到了位置，但没有把匹配位置（start/end）带出来，
+        // 方法一返回就只剩一个名字。手里没有"命中在原文哪里"，自然就填不了真正的片段，只能把 name 拿来占位，保证字段非 null。
         return List.of(new ResumeMention(name, name));
     }
 }

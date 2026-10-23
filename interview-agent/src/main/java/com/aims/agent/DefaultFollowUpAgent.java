@@ -26,7 +26,7 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultFollowUpAgent.class);
 
-    private final AiChatFacade aiChatFacade;
+    private final AiChatFacade aiChatFacade;  //调用大模型的方法
     private final ObjectMapper objectMapper;
     private final ResumeCrossCheckTool resumeCrossCheckTool;
     private final ResumeEntityMentionExtractor regexMentionExtractor;
@@ -47,18 +47,20 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
         this.aiMentionExtractor = aiMentionExtractor;
     }
 
+
+    /** 评估回答并决定是否追问。 **/
     @Override
     public FollowUpDecision evaluate(FollowUpContext context) {
         try {
             // F2：注册简历交叉验证工具，模型判定"需查证回答与简历一致性"时自主调用，工具结果仅作证据
             // F4：决策前先经规则通道探测矛盾点（公司/项目/时间），注入决策 prompt 并随决策返回，供落库/评估/报告引用
-            List<ConflictDetail> conflicts = probeConflicts(context);
+            List<ConflictDetail> conflicts = probeConflicts(context);//提取冲突点
             String result =
                     aiChatFacade.callWithTools(
                             ModelTier.STANDARD,
                             FollowUpPromptBuilder.decisionSystem(),
                             FollowUpPromptBuilder.decisionUser(context, conflicts),
-                            List.of(resumeCrossCheckTool));
+                            List.of(resumeCrossCheckTool));//工具列表
             if (result == null || result.isBlank()) {
                 log.warn("追问决策返回空，默认不追问 sessionId={}", context.sessionId());
                 return FollowUpDecision.noFollowUp("决策返回空");
@@ -72,7 +74,7 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
 
     /**
      * F4/F5 两级矛盾点探测：正则低成本提名 → AI 语义判定真实体 → DB 实体比对，返回矛盾点（探测失败返回空，不阻断决策）。
-     *
+     *这个代码的作用就是从回答里面找到公司名和项目名，然后找到冲突最后返回，但是呢找项目的冲突有bug
      * <p>多数轮次回答无公司/项目候选：正则空 → 直接返回，零额外 AI 成本。AI 判定候选非真实体（如「CLH等待队列」）→ 丢弃不报矛盾。
      */
     private List<ConflictDetail> probeConflicts(FollowUpContext context) {
@@ -80,12 +82,14 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
             return List.of();
         }
         try {
+            //todo这里如果正则没找到就直接返回了，这个是有问题的，
             // 一级：正则低成本提名；无候选 → 零 AI 成本直接返回
             List<ResumeEntityMentionExtractor.ResumeMention> regexMentions =
-                    regexMentionExtractor.extract(context.answer());
+                    regexMentionExtractor.extract(context.answer());//从回答里提取
             if (regexMentions == null || regexMentions.isEmpty()) {
                 return List.of();
             }
+            //todo如果正则不是空的才会走到这里
             // 二级：AI 语义判定，过滤非真实体；null（AI 不可用）→ 回退正则提名
             List<ResumeEntityMentionExtractor.ResumeMention> mentions =
                     aiMentionExtractor.extract(context.answer());
@@ -115,7 +119,7 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
     /** 决策结果回填探测到的矛盾点（决策 JSON 本身不含矛盾点，随决策带出供落库/评估引用）。 */
     private FollowUpDecision withConflicts(
             FollowUpDecision decision, List<ConflictDetail> conflicts) {
-        if (conflicts.isEmpty() || decision.conflictDetails().isEmpty() == false) {
+        if (conflicts.isEmpty() || !decision.conflictDetails().isEmpty()) {
             return decision;
         }
         return new FollowUpDecision(
@@ -126,6 +130,7 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
                 conflicts);
     }
 
+    //流式返回
     @Override
     public Flux<String> streamFollowUp(FollowUpContext context, FollowUpDecision decision) {
         InterviewerPersona persona =
@@ -136,17 +141,17 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
                         FollowUpPromptBuilder.followUpUser(context, decision))
                 .filter(chunk -> chunk != null && !chunk.isBlank());
     }
-
+   //提取json
     private FollowUpDecision parseDecision(String json, Long sessionId) {
         try {
             // 提取 JSON 部分（AI 可能输出多余文本）
             String jsonStr = extractJson(json);
-            DecisionDto dto = objectMapper.readValue(jsonStr, DecisionDto.class);
-            FollowUpType type = parseAction(dto.action());
+            DecisionDto dto = objectMapper.readValue(jsonStr, DecisionDto.class);//将json转化为实体类
+            FollowUpType type = parseAction(dto.action());//追问的类型，枚举
             if (type == FollowUpType.NONE) {
-                return FollowUpDecision.noFollowUp(dto.reason());
+                return FollowUpDecision.noFollowUp(dto.reason());//不追问的话就要填原因
             }
-            String question = dto.followUpQuestion();
+            String question = dto.followUpQuestion();//得到问题
             if (question == null || question.isBlank() || "null".equals(question)) {
                 log.warn(
                         "追问决策 action={} 但 followUpQuestion 为空，默认不追问 sessionId={}",
@@ -167,7 +172,7 @@ public class DefaultFollowUpAgent implements FollowUpAgent {
     /** 宽松解析：标准 JSON 失败时，用正则至少提取 action 字段；追问类型还需要 followUpQuestion。 */
     private FollowUpDecision parseLeniently(String raw, Long sessionId) {
         Matcher actionMatcher = Pattern.compile("\"action\"\\s*:\\s*\"([A-Za-z]+)\"").matcher(raw);
-        if (!actionMatcher.find()) {
+        if (!actionMatcher.find()) {//如果没有匹配到正则的话
             log.warn("追问决策宽松提取失败，默认不追问 sessionId={} raw={}", sessionId, truncate(raw, 300));
             return FollowUpDecision.noFollowUp("JSON 解析失败且无法提取 action");
         }

@@ -30,7 +30,7 @@ public class WorkExperienceEntity {
 
     private String endDate;
 
-    private String description;
+    private String description;//描述
 
     private Instant createdAt;
 
