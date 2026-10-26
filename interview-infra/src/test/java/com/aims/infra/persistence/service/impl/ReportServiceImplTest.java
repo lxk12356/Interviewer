@@ -45,6 +45,7 @@ class ReportServiceImplTest {
     @Mock private PositionService positionService;
     @Mock private ResumeService resumeService;
     @Mock private DefaultReportAgent reportAgent;
+    @Mock private ReportPersistenceService reportPersistenceService;
 
     private ReportServiceImpl service;
 
@@ -64,7 +65,8 @@ class ReportServiceImplTest {
                         resumeService,
                         new ResumeSummaryBuilder(new ObjectMapper(), experienceService),
                         reportAgent,
-                        new ObjectMapper());
+                        new ObjectMapper(),
+                        reportPersistenceService);
     }
 
     private InterviewSessionEntity session(String evaluationStatus, String status) {
@@ -123,7 +125,11 @@ class ReportServiceImplTest {
         assertDoesNotThrow(() -> service.generateReport(1L));
 
         verify(reportAgent).generate(any(), any(), anyDouble());
-        verify(sessionService).updateStatus(1L, com.aims.core.session.SessionStatus.COMPLETED);
-        verify(sessionService).updateEvaluationStatus(1L, "DONE");
+        // 落库与会话收尾已收敛到 ReportPersistenceService（同事务），此处只断言被编排调用
+        verify(reportPersistenceService)
+                .persistCompleted(
+                        org.mockito.ArgumentMatchers.eq(1L),
+                        any(),
+                        org.mockito.ArgumentMatchers.any());
     }
 }

@@ -25,6 +25,17 @@ public interface InterviewSessionMapper extends BaseMapper<InterviewSessionEntit
                     + " id = #{id}")
     int updateEvaluationStatus(@Param("id") Long id, @Param("status") String status);
 
+    /**
+     * 记录评估/报告失败原因（evaluation_error）。
+     *
+     * <p>该列自 V2_0_6 建表起一直没有写入方，导致"评估失败"在库里只剩一个 FAILED 状态词、
+     * 查不到任何原因。失败原因只存异常消息摘要（调用方截断 500 字），不存堆栈。
+     */
+    @Update(
+            "UPDATE interview_session SET evaluation_error = #{error}, updated_at = now() WHERE"
+                    + " id = #{id}")
+    int updateEvaluationError(@Param("id") Long id, @Param("error") String error);
+
     /** 更新已评估轮次数。 */
     @Update(
             "UPDATE interview_session SET evaluated_rounds = #{evaluatedRounds}, updated_at = now()"

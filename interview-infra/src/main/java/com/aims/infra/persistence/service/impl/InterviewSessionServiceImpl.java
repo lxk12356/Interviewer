@@ -284,6 +284,44 @@ public class InterviewSessionServiceImpl implements InterviewSessionService {
 
     @Override
     @Transactional
+    public void updateEvaluationError(Long sessionId, String error) {
+        sessionMapper.updateEvaluationError(sessionId, error);
+    }
+
+    @Override
+    @Transactional
+    public InterviewSessionEntity retryEvaluation(Long sessionId) {
+        InterviewSessionEntity entity = getById(sessionId);
+        SessionStatus current = SessionStatus.valueOf(entity.getStatus());
+        // 只有"评估流程相关"的状态才允许重跑；IN_PROGRESS 等仍可在面试侧的场次不允许
+        if (current != SessionStatus.FAILED
+                && current != SessionStatus.EVALUATING
+                && current != SessionStatus.REPORTING) {
+            throw new BizException(ErrorCode.SESSION_STATUS_CONFLICT);
+        }
+        // 有评分 → 只重跑报告（省掉一次 LLM 评估费用）；没有评分 → 从评估整体重跑
+        boolean hasScores = entity.getEvaluatedRounds() != null && entity.getEvaluatedRounds() > 0;
+        SessionStatus target = hasScores ? SessionStatus.REPORTING : SessionStatus.EVALUATING;
+        if (current != target) {
+            if (current.canTransitionTo(target)) {
+                updateStatus(sessionId, target);
+            } else {
+                // 兜底：例如 REPORTING 且无评分时没有合法回退路径，保留原状态只重置标记，
+                // 让人工决定是否整体重跑（不静默改状态）。
+                target = current;
+            }
+        }
+        // 重置消费端幂等守卫的依据 + 清掉上一次失败原因（下一次失败会重新写入）
+        sessionMapper.updateEvaluationStatus(sessionId, "PENDING");
+        sessionMapper.updateEvaluationError(sessionId, null);
+        entity.setStatus(target.name());
+        entity.setEvaluationStatus("PENDING");
+        entity.setEvaluationError(null);
+        return entity;
+    }
+
+    @Override
+    @Transactional
     public void updateEvaluatedRounds(Long sessionId, int evaluatedRounds) {
         sessionMapper.updateEvaluatedRounds(sessionId, evaluatedRounds);
     }

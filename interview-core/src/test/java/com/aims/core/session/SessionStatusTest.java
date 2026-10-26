@@ -88,6 +88,65 @@ class SessionStatusTest {
     }
 
     @Nested
+    class EvaluatingTransitions {
+        @Test
+        void evaluatingToReporting() {
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    SessionStatus.EVALUATING.canTransitionTo(SessionStatus.REPORTING));
+        }
+
+        @Test
+        void evaluatingToInProgress() {
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    SessionStatus.EVALUATING.canTransitionTo(SessionStatus.IN_PROGRESS));
+        }
+
+        @Test
+        void evaluatingToFailed() {
+            // 回归：评估阶段失败需要归档为 FAILED，否则 markFailed 的第一次调用就会抛异常，
+            // 连带吞掉 evaluation_status / evaluation_error 的写入。
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    SessionStatus.EVALUATING.canTransitionTo(SessionStatus.FAILED));
+        }
+
+        @Test
+        void evaluatingNotToCompleted() {
+            org.junit.jupiter.api.Assertions.assertFalse(
+                    SessionStatus.EVALUATING.canTransitionTo(SessionStatus.COMPLETED));
+        }
+    }
+
+    @Nested
+    class FailedRetryTransitions {
+        @Test
+        void failedCanRetryEvaluation() {
+            // 失败可重试：整体重跑（评估 + 报告）
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    SessionStatus.FAILED.canTransitionTo(SessionStatus.EVALUATING));
+        }
+
+        @Test
+        void failedCanRetryReportOnly() {
+            // 失败可重试：评估已完成、只重跑报告
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    SessionStatus.FAILED.canTransitionTo(SessionStatus.REPORTING));
+        }
+
+        @Test
+        void failedCannotJumpToCompleted() {
+            // 重试必须重新走评估/报告，不能直接把失败改成完成
+            org.junit.jupiter.api.Assertions.assertFalse(
+                    SessionStatus.FAILED.canTransitionTo(SessionStatus.COMPLETED));
+        }
+
+        @Test
+        void failedIsNotTerminalAnymore() {
+            // 语义变更：FAILED 从终态降级为"可重试的失败态"
+            org.junit.jupiter.api.Assertions.assertFalse(SessionStatus.FAILED.isTerminal());
+        }
+    }
+
+    @Nested
     class TerminalStates {
         @Test
         void completedHasNoTransitions() {
@@ -109,6 +168,8 @@ class SessionStatusTest {
 
         @Test
         void failedHasNoTransitions() {
+            // 允许的只有"重试入口"（EVALUATING / REPORTING）；不能直接跳到进行中或完成，
+            // 否则等于绕过评估/报告把失败洗成成功。
             org.junit.jupiter.api.Assertions.assertFalse(
                     SessionStatus.FAILED.canTransitionTo(SessionStatus.IN_PROGRESS));
             org.junit.jupiter.api.Assertions.assertFalse(
@@ -150,8 +211,10 @@ class SessionStatusTest {
         }
 
         @Test
-        void failedIsTerminal() {
-            org.junit.jupiter.api.Assertions.assertTrue(SessionStatus.FAILED.isTerminal());
+        void failedIsNoLongerTerminal() {
+            // 语义变更：FAILED 从终态降级为"可重试的失败态"（详见 SessionStatus 类注释）。
+            // 正向断言见 FailedRetryTransitions。
+            org.junit.jupiter.api.Assertions.assertFalse(SessionStatus.FAILED.isTerminal());
         }
 
         @Test

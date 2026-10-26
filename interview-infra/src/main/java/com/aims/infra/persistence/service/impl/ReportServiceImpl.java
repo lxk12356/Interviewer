@@ -9,7 +9,6 @@ import com.aims.core.evaluation.EvaluationDimension;
 import com.aims.core.interview.ConflictDetail;
 import com.aims.core.report.ReportContext;
 import com.aims.core.report.ReportResult;
-import com.aims.core.session.SessionStatus;
 import com.aims.infra.persistence.entity.EvaluationEntity;
 import com.aims.infra.persistence.entity.InterviewRoundEntity;
 import com.aims.infra.persistence.entity.InterviewSessionEntity;
@@ -52,6 +51,9 @@ public class ReportServiceImpl implements ReportService {
     private final DefaultReportAgent reportAgent;
     private final ObjectMapper objectMapper;
 
+    /** 报告落库的原子边界：upsert + 总分 + 转 COMPLETED + 置 DONE 必须同事务。 */
+    private final ReportPersistenceService reportPersistenceService;
+
     public ReportServiceImpl(
             ReportMapper reportMapper,
             EvaluationService evaluationService,
@@ -61,7 +63,8 @@ public class ReportServiceImpl implements ReportService {
             ResumeService resumeService,
             ResumeSummaryBuilder resumeSummaryBuilder,
             DefaultReportAgent reportAgent,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ReportPersistenceService reportPersistenceService) {
         this.reportMapper = reportMapper;
         this.evaluationService = evaluationService;
         this.sessionService = sessionService;
@@ -71,6 +74,7 @@ public class ReportServiceImpl implements ReportService {
         this.resumeSummaryBuilder = resumeSummaryBuilder;
         this.reportAgent = reportAgent;
         this.objectMapper = objectMapper;
+        this.reportPersistenceService = reportPersistenceService;
     }
 
     @Override
@@ -154,21 +158,17 @@ public class ReportServiceImpl implements ReportService {
             dimensionsJson = "{}";
         }
 
-        // 保存报告
+        // 保存报告 + 会话收尾：这五步必须原子（详见 ReportPersistenceService 类注释）。
+        // 历史实现是五条独立调用，一旦 upsert 成功而状态转移失败，就会留下
+        // "报告已入库、会话却是 FAILED"的不一致。
         ReportEntity entity = new ReportEntity();
         entity.setSessionId(sessionId);
         entity.setSummary(result.summary());
         entity.setDimensionsJson(dimensionsJson);
         entity.setRecommendation(result.recommendation().name());
-        reportMapper.upsert(entity);
+        reportPersistenceService.persistCompleted(
+                sessionId, entity, BigDecimal.valueOf(weightedScore));
 
-        // 更新会话总分
-        sessionService.updateTotalScore(sessionId, BigDecimal.valueOf(weightedScore));
-
-        // 状态转为 COMPLETED
-        sessionService.updateStatus(sessionId, SessionStatus.COMPLETED);
-        sessionService.markEnded(sessionId);
-        sessionService.updateEvaluationStatus(sessionId, "DONE");
         log.info("报告生成完成 sessionId={}", sessionId);
     }
 

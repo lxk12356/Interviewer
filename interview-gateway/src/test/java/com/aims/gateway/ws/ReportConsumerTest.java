@@ -63,6 +63,11 @@ class ReportConsumerTest {
         verify(reportService, times(3)).generateReport(3L);
         verify(sessionService).updateStatus(3L, SessionStatus.FAILED);
         verify(sessionService).updateEvaluationStatus(3L, "FAILED");
+        // 失败原因必须落库（evaluation_error），否则线上只能翻日志
+        verify(sessionService)
+                .updateEvaluationError(
+                        org.mockito.ArgumentMatchers.eq(3L),
+                        org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test

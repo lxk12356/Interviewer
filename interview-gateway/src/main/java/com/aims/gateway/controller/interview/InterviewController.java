@@ -428,6 +428,37 @@ public class InterviewController {
         return Result.ok(InterviewResponse.from(entity));
     }
 
+    /**
+     * 重跑评估/报告（失败可重试）。
+     *
+     * <p>用于在库中看到 {@code status=FAILED} 或 {@code evaluation_status=FAILED} 后人工重驱：
+     *
+     * <ol>
+     *   <li>状态重置：有评分 → {@code FAILED → REPORTING}（只重跑报告）；无评分 → {@code FAILED →
+     *       EVALUATING}（整体重跑）
+     *   <li>{@code evaluation_status} 置 {@code PENDING}、清空 {@code evaluation_error}
+     *   <li>按重置后的阶段重发 Kafka 消息，交给既有消费端重新执行（消费端幂等守卫不会再拦）
+     * </ol>
+     *
+     * <p>只允许对评估流程相关状态（FAILED / EVALUATING / REPORTING）调用，面试进行中的会话拒绝。
+     */
+    @Operation(
+            summary = "重跑评估/报告",
+            description = "把失败的评估流程重置为可再次消费的状态并重发 Kafka 消息（有评分只重跑报告）")
+    @PostMapping("/{id}/evaluation/retry")
+    public Result<InterviewResponse> retryEvaluation(@PathVariable Long id) {
+        // 1) 重置状态与失败标记（内部校验可重跑状态白名单）
+        InterviewSessionEntity reset = sessionService.retryEvaluation(id);
+        // 2) 按重置后的阶段重发消息：有评分 → 直接进报告；否则从评估开始
+        if (SessionStatus.REPORTING == SessionStatus.valueOf(reset.getStatus())) {
+            evaluationMessageProducer.sendReportRequest(id);
+        } else {
+            evaluationMessageProducer.sendEvaluationRequest(id);
+        }
+        log.info("人工重跑评估 sessionId={} targetStatus={}", id, reset.getStatus());
+        return Result.ok(InterviewResponse.from(sessionService.getById(id)));
+    }
+
     @Operation(summary = "查询面试轮次列表", description = "按 seq 排序返回所有轮次，用于面试间重连恢复历史消息")
     @GetMapping("/{id}/rounds")
     public Result<List<RoundResponse>> listRounds(@PathVariable Long id) {

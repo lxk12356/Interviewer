@@ -66,15 +66,41 @@ public class ReportConsumer {
         }
         // 重试耗尽：置 FAILED 后正常返回（不抛），保证 offset 提交、避免 Kafka 无限重投
         log.error("报告消费失败，重试耗尽置 FAILED sessionId={}", sessionId, last);
-        markFailed(sessionId);
+        markFailed(sessionId, last);
     }
 
-    private void markFailed(Long sessionId) {
+    /**
+     * 归档报告失败：<b>状态转移与失败标记分成两个独立 try</b>。
+     *
+     * <p>与 {@code EvaluationConsumer#markFailed} 同源缺陷：两条更新挤在同一个 try 里，前者抛异常会
+     * 让后者的失败标记写入被静默跳过。报告阶段当前状态是 REPORTING（→ FAILED 合法），但为了与评估
+     * 侧保持一致、避免将来状态或调用顺序变化后重现同样的静默失败，这里同样拆开。
+     */
+    private void markFailed(Long sessionId, Exception cause) {
+        // ① 状态归档：失败不阻断第 ② 步
         try {
             sessionService.updateStatus(sessionId, SessionStatus.FAILED);
-            sessionService.updateEvaluationStatus(sessionId, "FAILED");
         } catch (Exception ex) {
-            log.error("更新会话状态为 FAILED 失败 sessionId={}", sessionId, ex);
+            log.error("报告失败归档状态被拒绝 sessionId={}（保留原状态，仅写失败标记）", sessionId, ex);
         }
+        // ② 失败标记 + 原因：独立提交，保证失败可查询、可据此触发重跑
+        try {
+            sessionService.updateEvaluationStatus(sessionId, "FAILED");
+            sessionService.updateEvaluationError(sessionId, errorSummary(cause));
+        } catch (Exception ex) {
+            log.error("写入报告失败标记失败 sessionId={}", sessionId, ex);
+        }
+    }
+
+    /** 失败原因摘要：优先异常消息，为空退化为异常类名；截断 500 字，避免超长文本写库。 */
+    private static String errorSummary(Exception e) {
+        if (e == null) {
+            return "unknown error";
+        }
+        String message = e.getMessage();
+        if (message == null || message.isBlank()) {
+            return e.getClass().getSimpleName();
+        }
+        return message.length() > 500 ? message.substring(0, 500) : message;
     }
 }

@@ -72,15 +72,44 @@ public class EvaluationConsumer {
         }
         // 重试耗尽：置 FAILED 后正常返回（不抛），保证 offset 提交、避免 Kafka 无限重投
         log.error("评估消费失败，重试耗尽置 FAILED sessionId={}", sessionId, last);
-        markFailed(sessionId);
+        markFailed(sessionId, last);
     }
 
-    private void markFailed(Long sessionId) {
+    /**
+     * 归档评估失败：<b>状态转移与失败标记分成两个独立 try</b>。
+     *
+     * <p>历史缺陷：两条更新写在同一个 try 里，一旦 {@code updateStatus} 抛异常（例如状态机拒绝
+     * {@code EVALUATING → FAILED}），后面的 {@code evaluation_status} / {@code evaluation_error}
+     * 写入会被静默跳过 —— 会话永久停在 EVALUATING、库里没有任何失败标记，运维既看不出失败，
+     * 也没有依据去重跑。
+     *
+     * <p>拆开之后：状态转移失败不影响失败标记落库（"查得到失败"优先于"状态叫 FAILED"）。
+     */
+    private void markFailed(Long sessionId, Exception cause) {
+        // ① 状态归档：FAILED 目前可从 EVALUATING 迁入；若将来状态变化导致被拒，不影响第 ② 步
         try {
             sessionService.updateStatus(sessionId, SessionStatus.FAILED);
-            sessionService.updateEvaluationStatus(sessionId, "FAILED");
         } catch (Exception ex) {
-            log.error("更新会话状态为 FAILED 失败 sessionId={}", sessionId, ex);
+            log.error("评估失败归档状态被拒绝 sessionId={}（保留原状态，仅写失败标记）", sessionId, ex);
         }
+        // ② 失败标记 + 原因：独立提交，保证失败可查询、可据此触发重跑
+        try {
+            sessionService.updateEvaluationStatus(sessionId, "FAILED");
+            sessionService.updateEvaluationError(sessionId, errorSummary(cause));
+        } catch (Exception ex) {
+            log.error("写入评估失败标记失败 sessionId={}", sessionId, ex);
+        }
+    }
+
+    /** 失败原因摘要：优先异常消息，为空退化为异常类名；截断 500 字，避免超长文本写库。 */
+    private static String errorSummary(Exception e) {
+        if (e == null) {
+            return "unknown error";
+        }
+        String message = e.getMessage();
+        if (message == null || message.isBlank()) {
+            return e.getClass().getSimpleName();
+        }
+        return message.length() > 500 ? message.substring(0, 500) : message;
     }
 }

@@ -69,6 +69,33 @@ public interface InterviewSessionService {
     /** 更新评估流程状态。 */
     void updateEvaluationStatus(Long sessionId, String evaluationStatus);
 
+    /**
+     * 记录评估/报告失败原因（写入 {@code evaluation_error}）。
+     *
+     * <p>与 {@link #updateEvaluationStatus} 配套使用：状态给机器看，原因给人看。调用方负责截断长度。
+     */
+    void updateEvaluationError(Long sessionId, String error);
+
+    /**
+     * 失败重跑：把失败的评估流程重置为可再次消费的状态，供管理端/定时任务触发。
+     *
+     * <p>迁移规则（配合状态机的 {@code FAILED → EVALUATING / REPORTING}）：
+     *
+     * <ul>
+     *   <li>已有评分（{@code evaluated_rounds > 0}）→ 只重跑报告：{@code FAILED → REPORTING}
+     *   <li>没有评分 → 整体重跑：{@code FAILED → EVALUATING}
+     * </ul>
+     *
+     * <p>同时把 {@code evaluation_status} 重置为 {@code PENDING} 并清空上一次的 {@code evaluation_error}，
+     * 调用方随后重发 Kafka 消息即可（消费端幂等守卫不会再拦截）。
+     *
+     * @param sessionId 面试会话 ID
+     * @return 重置后的会话实体
+     * @throws com.aims.core.common.exception.BizException 当前状态不在可重跑范围（只允许
+     *     FAILED / EVALUATING / REPORTING）
+     */
+    InterviewSessionEntity retryEvaluation(Long sessionId);
+
     /** 更新已评估轮次数。 */
     void updateEvaluatedRounds(Long sessionId, int evaluatedRounds);
 
