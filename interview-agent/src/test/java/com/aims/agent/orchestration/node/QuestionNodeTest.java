@@ -129,4 +129,44 @@ class QuestionNodeTest {
         verify(streamEmitter).emitStart(sessionId, 1);
         verify(streamEmitter).emitEnd(eq(sessionId), eq("AB"));
     }
+
+    @Test
+    @DisplayName("P12 断线重建：待答题面命中同 seq → 复用题面，不调用模型、不推流")
+    void apply_reusesPendingQuestion_whenSeqMatches() throws Exception {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put(InterviewState.SESSION_ID, 7L);
+        data.put(InterviewState.CURRENT_SEQ, 2);
+        data.put(InterviewState.PENDING_QUESTION, "DB 已落库的第 3 题");
+        data.put(InterviewState.PENDING_QUESTION_SEQ, 3);
+        var state = new InterviewState(data);
+
+        Map<String, Object> result = node.apply(state);
+
+        assertEquals("DB 已落库的第 3 题", result.get(InterviewState.CURRENT_QUESTION));
+        assertEquals(3, result.get(InterviewState.CURRENT_SEQ));
+        assertEquals("", result.get(InterviewState.CURRENT_ANSWER));
+        // 一次性使用：复用后清空待答标记
+        assertNull(result.get(InterviewState.PENDING_QUESTION));
+        assertNull(result.get(InterviewState.PENDING_QUESTION_SEQ));
+        verifyNoInteractions(interviewerAgent);
+        verifyNoInteractions(streamEmitter);
+    }
+
+    @Test
+    @DisplayName("P12 待答题面 seq 不匹配 → 仍走正常模型生成路径")
+    void apply_generatesQuestion_whenPendingSeqMismatch() throws Exception {
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put(InterviewState.SESSION_ID, 7L);
+        data.put(InterviewState.CURRENT_SEQ, 2);
+        data.put(InterviewState.PENDING_QUESTION, "第 9 题（序号已推进，不应复用）");
+        data.put(InterviewState.PENDING_QUESTION_SEQ, 9);
+        var state = new InterviewState(data);
+        when(interviewerAgent.streamQuestion(any())).thenReturn(Flux.just("新题"));
+
+        Map<String, Object> result = node.apply(state);
+
+        assertEquals("新题", result.get(InterviewState.CURRENT_QUESTION));
+        verify(streamEmitter).emitStart(7L, 3);
+        verify(streamEmitter).emitEnd(eq(7L), eq("新题"));
+    }
 }

@@ -68,6 +68,18 @@ public class InterviewState extends AgentState {
     /** true=当前暂停等待的是追问回答（AnswerNode 据此构造追问 QaPair）。QuestionNode 换题时清零。 */
     public static final String PENDING_FOLLOW_UP = "pendingFollowUp";
 
+    /**
+     * 断线重建时从 DB 恢复的"待答题面"。
+     *
+     * <p>checkpoint 丢失后图只能从 START 重跑，若 {@code QuestionNode} 照常调用模型出题，就会生成一道与 DB
+     * 已落库题面不同的新题，导致"DB 里是旧题、候选人按新题作答、答案记到旧题名下"的错位。 该字段承载 DB 里未作答轮次的题面，命中同一
+     * seq 时由 {@code QuestionNode} 直接复用。
+     */
+    public static final String PENDING_QUESTION = "pendingQuestion";
+
+    /** 待答题面所属的主问题序号（与 {@link #PENDING_QUESTION} 配对，用于校验复用是否对得上）。 */
+    public static final String PENDING_QUESTION_SEQ = "pendingQuestionSeq";
+
     /** 各轮简历交叉验证矛盾点：key=主问题 seq 或 "seq:followUpIndex"，value=该轮矛盾点明细（Replace，随轮次累积）。 */
     public static final String CONFLICT_DETAILS_BY_ROUND = "conflictDetailsByRound";
 
@@ -140,6 +152,9 @@ public class InterviewState extends AgentState {
                     Map.entry(FOLLOW_UP_DECISION, Channels.base((old, v) -> v)),
                     Map.entry(FOLLOW_UP_COUNT, Channels.base(() -> 0)),
                     Map.entry(PENDING_FOLLOW_UP, Channels.base(() -> false)),
+                    // P12：断线重建的待答标记，一次性使用（QuestionNode 复用后置 null）
+                    Map.entry(PENDING_QUESTION, Channels.base((old, v) -> v)),
+                    Map.entry(PENDING_QUESTION_SEQ, Channels.base((old, v) -> v)),
                     // 矛盾点映射：Replace 语义（FollowUpDecisionNode 每次写入最新累积）
                     Map.entry(CONFLICT_DETAILS_BY_ROUND, Channels.base(() -> Map.of())),
 
@@ -269,6 +284,16 @@ public class InterviewState extends AgentState {
     /** 当前暂停等待的是否为追问回答。 */
     public boolean pendingFollowUp() {
         return this.<Boolean>value(PENDING_FOLLOW_UP).orElse(false);
+    }
+
+    /** 断线重建恢复的待答题面（无则 null）。 */
+    public String pendingQuestion() {
+        return this.<String>value(PENDING_QUESTION).orElse(null);
+    }
+
+    /** 待答题面所属的主问题序号（无则 null）。 */
+    public Integer pendingQuestionSeq() {
+        return this.<Integer>value(PENDING_QUESTION_SEQ).orElse(null);
     }
 
     /** 各轮矛盾点映射（key=seq 或 "seq:followUpIndex"）。 */
