@@ -28,12 +28,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /** 面试会话持久化服务实现。 */
 @Service
 public class InterviewSessionServiceImpl implements InterviewSessionService {
+
+    private static final Logger log = LoggerFactory.getLogger(InterviewSessionServiceImpl.class);
 
     /** 候选人访问令牌长度（32 字节随机串，Base64 URL-safe 编码后 43 字符）。 */
     private static final int ACCESS_TOKEN_BYTES = 32;
@@ -299,9 +303,24 @@ public class InterviewSessionServiceImpl implements InterviewSessionService {
                 && current != SessionStatus.REPORTING) {
             throw new BizException(ErrorCode.SESSION_STATUS_CONFLICT);
         }
-        // 有评分 → 只重跑报告（省掉一次 LLM 评估费用）；没有评分 → 从评估整体重跑
-        boolean hasScores = entity.getEvaluatedRounds() != null && entity.getEvaluatedRounds() > 0;
-        SessionStatus target = hasScores ? SessionStatus.REPORTING : SessionStatus.EVALUATING;
+        // 判据必须是"全部轮次都评过分"，不能只看 evaluated_rounds > 0：
+        // 评估中途失败（例如 8 轮只打完 3 轮）时 evaluated_rounds 也 > 0，
+        // 若据此直接回 REPORTING，就会跳过评估、拿 3 轮评分生成残缺报告。
+        int evaluated = entity.getEvaluatedRounds() == null ? 0 : entity.getEvaluatedRounds();
+        int total =
+                entity.getTotalRoundsToEvaluate() == null
+                        ? 0
+                        : entity.getTotalRoundsToEvaluate();
+        boolean evaluationCompleted = total > 0 && evaluated >= total;
+        SessionStatus target =
+                evaluationCompleted ? SessionStatus.REPORTING : SessionStatus.EVALUATING;
+        if (!evaluationCompleted) {
+            log.warn(
+                    "重跑评估：评分未完成（{}/{} 轮），回到 EVALUATING 重新打分 sessionId={}",
+                    evaluated,
+                    total,
+                    sessionId);
+        }
         if (current != target) {
             if (current.canTransitionTo(target)) {
                 updateStatus(sessionId, target);
@@ -324,6 +343,13 @@ public class InterviewSessionServiceImpl implements InterviewSessionService {
     @Transactional
     public void updateEvaluatedRounds(Long sessionId, int evaluatedRounds) {
         sessionMapper.updateEvaluatedRounds(sessionId, evaluatedRounds);
+    }
+
+    @Override
+    @Transactional
+    public void refreshEvaluatedRounds(Long sessionId) {
+        // 单条 UPDATE 自带原子性；SQL 内部按 interview_evaluation 实算，重复执行结果一致（幂等）
+        sessionMapper.refreshEvaluatedRounds(sessionId);
     }
 
     @Override

@@ -96,8 +96,25 @@ public interface InterviewSessionService {
      */
     InterviewSessionEntity retryEvaluation(Long sessionId);
 
-    /** 更新已评估轮次数。 */
+    /** 更新已评估轮次数（旧实现：由调用方传入自增值；新代码请用 {@link #refreshEvaluatedRounds}）。 */
     void updateEvaluatedRounds(Long sessionId, int evaluatedRounds);
+
+    /**
+     * 自愈式刷新已评估轮次数：按 {@code interview_evaluation} 实算，幂等。
+     *
+     * <p>替代 {@link #updateEvaluatedRounds} 的"应用自增"写法。原因：
+     *
+     * <ul>
+     *   <li>原实现里"批量插入评分"和"自增写进度"是两条独立语句/事务，前者成功、后者失败时
+     *       会留下"评分已写、进度没进"的不一致；
+     *   <li>而进度正是重跑判据（{@code retryEvaluation} 据此决定回 EVALUATING 还是 REPORTING），
+     *       一旦偏小就会把已完成的轮次误判为未完成，触发不必要的全量重评。
+     * </ul>
+     *
+     * <p>改为"按库实算 + 幂等"后：某次刷新失败只是暂时落后，下一次刷新会自动补正，
+     * 因此不需要为这两步引入事务（事务只能保证单次原子，救不回已经错位的旧值）。
+     */
+    void refreshEvaluatedRounds(Long sessionId);
 
     /** 更新需评估的总轮次数。 */
     void updateTotalRoundsToEvaluate(Long sessionId, int total);

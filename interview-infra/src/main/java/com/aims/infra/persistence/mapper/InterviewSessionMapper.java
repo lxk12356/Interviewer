@@ -42,6 +42,29 @@ public interface InterviewSessionMapper extends BaseMapper<InterviewSessionEntit
                     + " WHERE id = #{id}")
     int updateEvaluatedRounds(@Param("id") Long id, @Param("evaluatedRounds") int evaluatedRounds);
 
+    /**
+     * 自愈式刷新已评估轮次数：不再由应用传入自增值，而是按 {@code interview_evaluation} 实算。
+     *
+     * <p>语义：{@code evaluated_rounds = LEAST(已评分的不同轮次数, 应评轮次总数)}。
+     *
+     * <ul>
+     *   <li>用 {@code COUNT(DISTINCT round_id)} 而不是 {@code COUNT(*)}：评分表没有唯一约束，
+     *       历史上的重复行不会把进度算多；
+     *   <li>用 {@code LEAST(..., total_rounds_to_evaluate)}：脏数据导致统计超过总数时不会越界；
+     *   <li><b>幂等</b>：重复执行结果相同，所以某一轮刷新失败后，下一轮（或收尾的兜底刷新）
+     *       会自动把进度补正 —— 不需要为"写评分 + 推进度"引入事务。
+     * </ul>
+     */
+    @Update(
+            "UPDATE interview_session"
+                    + " SET evaluated_rounds = LEAST("
+                    + "   (SELECT COUNT(DISTINCT round_id) FROM interview_evaluation"
+                    + "     WHERE session_id = #{id}),"
+                    + "   COALESCE(total_rounds_to_evaluate, 0)),"
+                    + "   updated_at = now()"
+                    + " WHERE id = #{id}")
+    int refreshEvaluatedRounds(@Param("id") Long id);
+
     /** 更新需评估的总轮次数。 */
     @Update(
             "UPDATE interview_session SET total_rounds_to_evaluate = #{total}, updated_at = now()"

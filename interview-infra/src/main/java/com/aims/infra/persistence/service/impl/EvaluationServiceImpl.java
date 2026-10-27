@@ -57,7 +57,7 @@ public class EvaluationServiceImpl implements EvaluationService {
         this.evaluatorAgent = evaluatorAgent;
     }
 
-    @Override
+    @Override//这个方法就是就是消费评估的主要逻辑
     public void evaluateSession(Long sessionId) {
         // FE.15 P11 幂等守卫：Kafka at-least-once 下重复投递时评估已完成（REPORTING/DONE），
         // 跳过 AI 调用避免重复评估浪费 token。首次执行状态为 EVALUATING；失败重试耗尽置 FAILED 不命中守卫。
@@ -87,7 +87,7 @@ public class EvaluationServiceImpl implements EvaluationService {
         InterviewSessionEntity session = sessionService.getById(sessionId);
         PositionEntity position = positionService.getById(session.getPositionId());
         ResumeEntity resume = resumeService.getById(session.getResumeId());
-        String resumeSummary = resumeSummaryBuilder.build(resume);
+        String resumeSummary = resumeSummaryBuilder.build(resume);//相当于把整个简历转化成了一个字符串
 
         // 逐轮评估
         for (int i = 0; i < answered.size(); i++) {
@@ -110,7 +110,7 @@ public class EvaluationServiceImpl implements EvaluationService {
 
                 List<RoundEvaluation> evaluations = evaluatorAgent.evaluate(context);
 
-                // 批量写入评分记录
+                // 批量写入评分记录，五个维度的评分列表都要插进去
                 List<EvaluationEntity> entities = new ArrayList<>();
                 for (RoundEvaluation eval : evaluations) {
                     EvaluationEntity entity = new EvaluationEntity();
@@ -122,10 +122,29 @@ public class EvaluationServiceImpl implements EvaluationService {
                     entity.setEvidenceQuote(eval.evidenceQuote());
                     entities.add(entity);
                 }
-                evaluationMapper.batchInsert(entities);
+                //下面这两行应该同成功同时失败的这里最简单粗暴的就是加事务，我这里采取的方案是：进度改成派生值不用实物
+                
+                // ===================== 旧实现（保留注释便于对照，已停用）=====================
+                // 下面两行是"批量插入评分 + 应用自增写进度"，它们各自是独立语句/事务：
+                //   evaluationMapper.batchInsert(entities);                 // 事务 A（单条多值 INSERT）
+                //   sessionService.updateEvaluatedRounds(sessionId, i+1);   // 事务 B（另一条 UPDATE）
+                // 问题：A 成功、B 失败（DB 抖动/连接断/进程崩）时，库里留下"评分已写、进度没进"。
+                // 而进度正是重跑判据（retryEvaluation 用 evaluated_rounds 决定回 EVALUATING 还是
+                // REPORTING），偏小就会把已完成的轮次误判为未完成，触发不必要的全量重评。
+                // 事务只能保证"这次"原子，救不回已经错位的旧值，所以不是最优解。
+                // evaluationMapper.batchInsert(entities);
+                // sessionService.updateEvaluatedRounds(sessionId, i + 1);
+                // ==========================================================================
 
-                // 更新进度
-                sessionService.updateEvaluatedRounds(sessionId, i + 1);
+                // 新实现（自愈式进度）：分两步，但不再依赖事务
+                // ① 写入本轮 5 维评分：单条多值 INSERT，语句本身原子，要么 5 行全进、要么都不进
+                evaluationMapper.batchInsert(entities);
+                // ② 进度不再由应用自增，而是让 DB 按 interview_evaluation 实算并回填：
+                //      evaluated_rounds = LEAST(COUNT(DISTINCT round_id), total_rounds_to_evaluate)
+                //    为什么这样更好：这条 UPDATE 是幂等的（重复执行结果相同），
+                //    因此某次刷新失败只是暂时落后，下一轮或收尾时的兜底刷新会自动补正。
+                //    换句话说——用"可重算"替代"必须原子"，比加事务更抗故障。
+                sessionService.refreshEvaluatedRounds(sessionId);
                 log.info(
                         "轮次评估完成 sessionId={} roundId={} seq={} progress={}/{}",
                         sessionId,
@@ -143,9 +162,13 @@ public class EvaluationServiceImpl implements EvaluationService {
             }
         }
 
+        // 收尾兜底：最后一轮的进度刷新万一失败，这里再算一次（幂等，代价一次子查询），
+        // 保证进入 REPORTING 之前 evaluated_rounds 是准确的（它是重跑判据的依据）。
+        sessionService.refreshEvaluatedRounds(sessionId);
+
         // 评估完成，状态转为 REPORTING
-        sessionService.updateStatus(sessionId, SessionStatus.REPORTING);
-        sessionService.updateEvaluationStatus(sessionId, "REPORTING");
+        sessionService.updateStatus(sessionId, SessionStatus.REPORTING);//把interview_session里面的status改成report
+        sessionService.updateEvaluationStatus(sessionId, "REPORTING");//把interview表里面的evaluationStatus字段改为report
         log.info("评估完成，进入报告生成 sessionId={}", sessionId);
     }
 
