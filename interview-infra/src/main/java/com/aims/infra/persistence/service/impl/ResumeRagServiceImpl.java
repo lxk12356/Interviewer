@@ -283,14 +283,23 @@ public class ResumeRagServiceImpl implements ResumeRagService {
                 fullSql.toString(), createRowMapper(List.of(), "VECTOR"), params.toArray());
     }
 
-    private RowMapper<ResumeSearchResult> createRowMapper(List<String> terms, String recallSource) {
+    /** 行映射：可见性放到包内，便于单测直接断言"分数口径"（混合加权 / 降级不缩放）。 */
+    RowMapper<ResumeSearchResult> createRowMapper(List<String> terms, String recallSource) {
         return (rs, rowNum) -> {
             String skillsJson = rs.getString("skills_json");
             List<String> skills = parseSkills(skillsJson);
             String skillsText = String.join(" ", skills);
             double vectorScore = rs.getDouble("vector_score");
             double keywordScore = rs.getDouble("keyword_score");
-            double finalScore = vectorScore * VECTOR_WEIGHT + keywordScore * KEYWORD_WEIGHT;
+            // 降级路径（纯向量）没有关键词信号，不能把缺项当 0 再乘 0.7 ——
+            // 否则所有分数被整体打 7 折：排序不受影响（单调缩放），但分数上限从 1.0 掉到 0.7，
+            // 导致 minScore 阈值不可跨路径复用，且追问 prompt 里"score<0.5 疑似夸大"的判定会系统性偏移。
+            // 这里做权重归一化：关键词不可用时把全部权重给向量，分数口径统一为 0~1。
+            boolean keywordAvailable = !"VECTOR".equals(recallSource);
+            double finalScore =
+                    keywordAvailable
+                            ? vectorScore * VECTOR_WEIGHT + keywordScore * KEYWORD_WEIGHT
+                            : vectorScore;
             String currentTitle = rs.getString("current_title");
             String candidateName = rs.getString("candidate_name");
             String rawText = rs.getString("raw_text");

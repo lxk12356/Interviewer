@@ -173,4 +173,40 @@ class QuestionRagServiceImplTest {
         assertEquals(1, resp.results().size());
         assertEquals("HYBRID", resp.results().getFirst().recallSource());
     }
+
+    // ---- 分数口径：混合加权 vs 降级不缩放（回归：降级曾被整体打 7 折） ----
+
+    private java.sql.ResultSet rs(double vectorScore, double keywordScore) throws Exception {
+        java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+        when(rs.getDouble("vector_score")).thenReturn(vectorScore);
+        when(rs.getDouble("keyword_score")).thenReturn(keywordScore);
+        when(rs.getLong("id")).thenReturn(1L);
+        when(rs.getString("category")).thenReturn("TECHNICAL");
+        when(rs.getString("topic")).thenReturn("Redis");
+        when(rs.getString("difficulty")).thenReturn("MEDIUM");
+        when(rs.getString("content")).thenReturn("Redis 持久化有哪几种方式");
+        when(rs.getString("standard_answer")).thenReturn("RDB/AOF");
+        return rs;
+    }
+
+    @Test
+    void rowMapper_hybrid_weightsVectorAndKeyword() throws Exception {
+        RowMapper<QuestionSearchResult> mapper = service.createRowMapper(List.of(), "HYBRID");
+
+        QuestionSearchResult result = mapper.mapRow(rs(0.5, 1.0), 0);
+
+        // 0.5*0.7 + 1.0*0.3 = 0.65
+        assertEquals(0.65, result.score(), 1e-9);
+    }
+
+    @Test
+    void rowMapper_vectorFallback_doesNotScaleScore() throws Exception {
+        RowMapper<QuestionSearchResult> mapper = service.createRowMapper(List.of(), "VECTOR");
+
+        QuestionSearchResult result = mapper.mapRow(rs(0.9, 0.0), 0);
+
+        // 回归点：降级路径应做权重归一化 → score == vectorScore(0.9)，而不是 0.7*0.9=0.63
+        assertEquals(0.9, result.score(), 1e-9);
+        assertEquals(0.0, result.keywordScore(), 1e-9);
+    }
 }

@@ -12,7 +12,8 @@ import java.util.List;
  * @param currentTitle 当前职位
  * @param yearsOfExperience 工作年限
  * @param skills 技能列表
- * @param score 混合最终得分（vectorScore * 0.7 + keywordScore * 0.3）
+ * @param score 混合最终得分（vectorScore * 0.7 + keywordScore * 0.3；纯向量降级时等于 vectorScore，
+ *     即权重归一化，保证两条路径分数上限都是 1.0）
  * @param vectorScore 向量相似度得分（1 - 余弦距离，越大越相关）
  * @param keywordScore 关键词匹配得分（0-1，命中 raw_text=1.0、skills=0.9、candidate_name=0.8）
  * @param matchedSnippet 命中高亮片段（命中词 ±30 字符；关键词未命中时回退为职位/技能摘要）
