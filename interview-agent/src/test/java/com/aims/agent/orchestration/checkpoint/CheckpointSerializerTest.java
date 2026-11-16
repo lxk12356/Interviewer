@@ -457,4 +457,16 @@ class CheckpointSerializerTest {
         data.put(InterviewState.RAG_QUESTIONS, "rag 内容");
         return data;
     }
+
+    @Test
+    void pendingRound_survivesCheckpointRoundTrip() {
+        var pending =
+                new com.aims.core.interview.PendingRound(
+                        1002L, "追问", null, 3, 2, FollowUpType.DEEPEN);
+        var checkpoint =
+                new CheckpointRecord(
+                        "id", "plan", "ask", Map.of(InterviewState.PENDING_ROUND, pending), 1L);
+        var restored = serializer.deserialize(serializer.serialize(checkpoint));
+        assertEquals(pending, new InterviewState(restored.stateData()).pendingRound());
+    }
 }

@@ -5,6 +5,7 @@ import com.aims.core.interview.FollowUpDecision;
 import com.aims.core.interview.FollowUpType;
 import com.aims.core.interview.InterviewPlan;
 import com.aims.core.interview.InterviewerPersona;
+import com.aims.core.interview.PendingRound;
 import com.aims.core.interview.QaPair;
 import com.aims.core.interview.SupervisorDecision;
 import com.aims.core.report.ReportResult;
@@ -71,11 +72,13 @@ public class InterviewState extends AgentState {
     /**
      * 断线重建时从 DB 恢复的"待答题面"。
      *
-     * <p>checkpoint 丢失后图只能从 START 重跑，若 {@code QuestionNode} 照常调用模型出题，就会生成一道与 DB
-     * 已落库题面不同的新题，导致"DB 里是旧题、候选人按新题作答、答案记到旧题名下"的错位。 该字段承载 DB 里未作答轮次的题面，命中同一
-     * seq 时由 {@code QuestionNode} 直接复用。
+     * <p>checkpoint 丢失后图只能从 START 重跑，若 {@code QuestionNode} 照常调用模型出题，就会生成一道与 DB 已落库题面不同的新题，导致"DB
+     * 里是旧题、候选人按新题作答、答案记到旧题名下"的错位。 该字段承载 DB 里未作答轮次的题面，命中同一 seq 时由 {@code QuestionNode} 直接复用。
      */
     public static final String PENDING_QUESTION = "pendingQuestion";
+
+    /** 统一恢复主问题/追问的待答快照，QuestionNode 消费后清空。 */
+    public static final String PENDING_ROUND = "pendingRound";
 
     /** 待答题面所属的主问题序号（与 {@link #PENDING_QUESTION} 配对，用于校验复用是否对得上）。 */
     public static final String PENDING_QUESTION_SEQ = "pendingQuestionSeq";
@@ -153,6 +156,7 @@ public class InterviewState extends AgentState {
                     Map.entry(FOLLOW_UP_COUNT, Channels.base(() -> 0)),
                     Map.entry(PENDING_FOLLOW_UP, Channels.base(() -> false)),
                     // P12：断线重建的待答标记，一次性使用（QuestionNode 复用后置 null）
+                    Map.entry(PENDING_ROUND, Channels.base((old, v) -> v)),
                     Map.entry(PENDING_QUESTION, Channels.base((old, v) -> v)),
                     Map.entry(PENDING_QUESTION_SEQ, Channels.base((old, v) -> v)),
                     // 矛盾点映射：Replace 语义（FollowUpDecisionNode 每次写入最新累积）
@@ -284,6 +288,10 @@ public class InterviewState extends AgentState {
     /** 当前暂停等待的是否为追问回答。 */
     public boolean pendingFollowUp() {
         return this.<Boolean>value(PENDING_FOLLOW_UP).orElse(false);
+    }
+
+    public PendingRound pendingRound() {
+        return this.<PendingRound>value(PENDING_ROUND).orElse(null);
     }
 
     /** 断线重建恢复的待答题面（无则 null）。 */

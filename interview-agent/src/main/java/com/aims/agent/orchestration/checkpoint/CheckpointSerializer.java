@@ -7,6 +7,7 @@ import com.aims.core.interview.FollowUpDecision;
 import com.aims.core.interview.FollowUpType;
 import com.aims.core.interview.InterviewPlan;
 import com.aims.core.interview.InterviewerPersona;
+import com.aims.core.interview.PendingRound;
 import com.aims.core.interview.QaPair;
 import com.aims.core.interview.SupervisorDecision;
 import com.aims.core.report.ReportResult;
@@ -104,6 +105,7 @@ public class CheckpointSerializer {
 
     private static final Map<String, Class<?>> RECORD_TYPES =
             Map.of(
+                    InterviewState.PENDING_ROUND, PendingRound.class,
                     InterviewState.INTERVIEW_PLAN, InterviewPlan.class,
                     InterviewState.FOLLOW_UP_DECISION, FollowUpDecision.class,
                     InterviewState.REPORT_RESULT, ReportResult.class,

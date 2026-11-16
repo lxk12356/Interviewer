@@ -169,4 +169,67 @@ class QuestionNodeTest {
         verify(streamEmitter).emitStart(7L, 3);
         verify(streamEmitter).emitEnd(eq(7L), eq("新题"));
     }
+
+    @Test
+    void restoresPendingFollowUp_withoutAdvancingOrCallingModel() throws Exception {
+        var pending =
+                new com.aims.core.interview.PendingRound(
+                        1002L,
+                        "删除缓存失败如何重试？",
+                        null,
+                        3,
+                        2,
+                        com.aims.core.interview.FollowUpType.DEEPEN);
+        var state =
+                new InterviewState(
+                        Map.of(
+                                InterviewState.CURRENT_SEQ,
+                                3,
+                                InterviewState.PENDING_ROUND,
+                                pending));
+        var result = node.apply(state);
+        assertEquals(1002L, result.get(InterviewState.CURRENT_ROUND_ID));
+        assertEquals(3, result.get(InterviewState.CURRENT_SEQ));
+        assertEquals(3, result.get(InterviewState.PARENT_SEQ));
+        assertEquals(2, result.get(InterviewState.FOLLOW_UP_COUNT));
+        assertEquals(2, result.get(InterviewState.FOLLOW_UP_INDEX));
+        assertEquals(true, result.get(InterviewState.PENDING_FOLLOW_UP));
+        assertEquals(
+                com.aims.core.interview.FollowUpType.DEEPEN,
+                result.get(InterviewState.FOLLOW_UP_TYPE));
+        assertNull(result.get(InterviewState.PENDING_ROUND));
+        verifyNoInteractions(interviewerAgent, streamEmitter);
+
+        // 恢复后真实回答节点仍按追问记录答案。
+        result.put(InterviewState.CURRENT_ANSWER, "通过重试队列补偿");
+        var answered = new AnswerNode().apply(new InterviewState(result));
+        var qa = (com.aims.core.interview.QaPair) answered.get(InterviewState.QA_HISTORY);
+        assertEquals(3, qa.seq());
+        assertEquals(2, qa.followUpIndex());
+        assertEquals("删除缓存失败如何重试？", qa.question());
+    }
+
+    @Test
+    void restoresPendingMain_usingStoredSeqAndClearingFollowUp() throws Exception {
+        var pending = new com.aims.core.interview.PendingRound(1001L, "主问题", 3, null, null, null);
+        var state =
+                new InterviewState(
+                        Map.of(
+                                InterviewState.CURRENT_SEQ,
+                                3,
+                                InterviewState.PENDING_ROUND,
+                                pending,
+                                InterviewState.PENDING_FOLLOW_UP,
+                                true,
+                                InterviewState.FOLLOW_UP_COUNT,
+                                2));
+        var result = node.apply(state);
+        assertEquals(3, result.get(InterviewState.CURRENT_SEQ));
+        assertEquals(1001L, result.get(InterviewState.CURRENT_ROUND_ID));
+        assertEquals(false, result.get(InterviewState.PENDING_FOLLOW_UP));
+        assertEquals(0, result.get(InterviewState.FOLLOW_UP_COUNT));
+        assertNull(result.get(InterviewState.PARENT_SEQ));
+        assertNull(result.get(InterviewState.FOLLOW_UP_INDEX));
+        verifyNoInteractions(interviewerAgent, streamEmitter);
+    }
 }

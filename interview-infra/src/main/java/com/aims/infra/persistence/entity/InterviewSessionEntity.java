@@ -13,75 +13,89 @@ import java.time.Instant;
 public class InterviewSessionEntity {
 
     @TableId(value = "id", type = IdType.AUTO)
-    private Long id;//自动生成id,主键，数据库自增
+    private Long id; // 自动生成id,主键，数据库自增
+
+    /** 当前问答记录的主键；恢复时定位主问题或追问。 */
+    @TableField("current_round_id")
+    private Long currentRoundId;
+
+    public Long getCurrentRoundId() {
+        return currentRoundId;
+    }
+
+    public void setCurrentRoundId(Long currentRoundId) {
+        this.currentRoundId = currentRoundId;
+    }
 
     @TableField("candidate_id")
-    private Long candidateId;//候选人 ID → candidate 表
+    private Long candidateId; // 候选人 ID → candidate 表
 
     @TableField("resume_id")
-    private Long resumeId;//用的哪份简历 → resume 表有外键，idx_session_resume 索引
+    private Long resumeId; // 用的哪份简历 → resume 表有外键，idx_session_resume 索引
 
     @TableField("position_id")
-    private Long positionId;//应聘哪个岗位 → position 表有外键
-//会话状态默认 CREATED，9 个值（见状态机）
+    private Long positionId; // 应聘哪个岗位 → position 表有外键
+
+    // 会话状态默认 CREATED，9 个值（见状态机）
     private String status;
 
     @TableField("plan_json")
-    private String planJson;//AI 生成的面试计划板块划分 + 题目 + 追问提示 + 评价重点
+    private String planJson; // AI 生成的面试计划板块划分 + 题目 + 追问提示 + 评价重点
 
     @TableField("started_at")
-    private Instant startedAt;//面试开始时间
+    private Instant startedAt; // 面试开始时间
 
     @TableField("ended_at")
-    private Instant endedAt;//面试结束时间
+    private Instant endedAt; // 面试结束时间
 
     @TableField("total_score")
-    private BigDecimal totalScore;//总分
+    private BigDecimal totalScore; // 总分
 
-    @TableField(value = "created_at", fill = FieldFill.INSERT)//fill是开启自动填充
-    private Instant createdAt;//创建时间
+    @TableField(value = "created_at", fill = FieldFill.INSERT) // fill是开启自动填充
+    private Instant createdAt; // 创建时间
 
     @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
-    private Instant updatedAt;//更新时间
+    private Instant updatedAt; // 更新时间
 
     @TableField("evaluation_status")
-    private String evaluationStatus;//评估流程状态，PENDING/EVALUATING/REPORTING/DONE/FAILED，待处理，面试中，面试结束正在整理，完成，失败
+    private String
+            evaluationStatus; // 评估流程状态，PENDING/EVALUATING/REPORTING/DONE/FAILED，待处理，面试中，面试结束正在整理，完成，失败
 
     @TableField("evaluation_error")
-    private String evaluationError;//评估失败原因
+    private String evaluationError; // 评估失败原因
 
     @TableField("evaluated_rounds")
-    private Integer evaluatedRounds;//总共评估几轮
+    private Integer evaluatedRounds; // 总共评估几轮
 
     @TableField("total_rounds_to_evaluate")
-    private Integer totalRoundsToEvaluate;//已经评估完几轮
+    private Integer totalRoundsToEvaluate; // 已经评估完几轮
 
     @TableField("persona")
-    private String persona;//面试官人设
+    private String persona; // 面试官人设
 
     @TableField("access_token")
-    private String accessToken;//候选人链接令牌
+    private String accessToken; // 候选人链接令牌
 
     @TableField("access_password")
-    private String accessPassword;//进入的密码
+    private String accessPassword; // 进入的密码
 
     @TableField("access_enabled")
-    private Boolean accessEnabled;//候选人入口开关
+    private Boolean accessEnabled; // 候选人入口开关
 
     @TableField("access_mode")
-    private String accessMode;//入口模式NONE/CANDIDATE_ONLY/DISABLED，默认 NONE
+    private String accessMode; // 入口模式NONE/CANDIDATE_ONLY/DISABLED，默认 NONE
 
     @TableField("proctor_json")
-    private String proctorJson;//本场防作弊开关如 {"tabSwitch":true,"gaze":false}
+    private String proctorJson; // 本场防作弊开关如 {"tabSwitch":true,"gaze":false}
 
     @TableField("finished_by")
-    private String finishedBy;//谁结束的
+    private String finishedBy; // 谁结束的
 
     @TableField("finish_reason")
-    private String finishReason;//结束原因
+    private String finishReason; // 结束原因
 
     @TableField("tts_enabled")
-    private Boolean ttsEnabled;//是否开始语音播报
+    private Boolean ttsEnabled; // 是否开始语音播报
 
     public Long getId() {
         return id;

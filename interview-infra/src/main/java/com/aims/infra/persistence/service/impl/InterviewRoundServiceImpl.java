@@ -5,6 +5,7 @@ import com.aims.core.common.exception.BizException;
 import com.aims.core.interview.ConflictDetail;
 import com.aims.infra.persistence.entity.InterviewRoundEntity;
 import com.aims.infra.persistence.mapper.InterviewRoundMapper;
+import com.aims.infra.persistence.mapper.InterviewSessionMapper;
 import com.aims.infra.persistence.service.ConflictDetailsJson;
 import com.aims.infra.persistence.service.InterviewRoundService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -19,8 +20,12 @@ public class InterviewRoundServiceImpl implements InterviewRoundService {
 
     private final InterviewRoundMapper roundMapper;
 
-    public InterviewRoundServiceImpl(InterviewRoundMapper roundMapper) {
+    private final InterviewSessionMapper sessionMapper;
+
+    public InterviewRoundServiceImpl(
+            InterviewRoundMapper roundMapper, InterviewSessionMapper sessionMapper) {
         this.roundMapper = roundMapper;
+        this.sessionMapper = sessionMapper;
     }
 
     @Override
@@ -32,6 +37,7 @@ public class InterviewRoundServiceImpl implements InterviewRoundService {
         entity.setQuestion(question);
         entity.setCreatedAt(Instant.now());
         roundMapper.insert(entity);
+        setCurrentRound(sessionId, entity.getId());
         return entity;
     }
 
@@ -53,7 +59,33 @@ public class InterviewRoundServiceImpl implements InterviewRoundService {
         entity.setFollowUpIndex(followUpIndex);
         entity.setCreatedAt(Instant.now());
         roundMapper.insert(entity);
+        setCurrentRound(sessionId, entity.getId());
         return entity;
+    }
+
+    @Override
+    public InterviewRoundEntity getCurrentRound(Long sessionId) {
+        var session = sessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new BizException(ErrorCode.RESOURCE_NOT_FOUND, "面试会话不存在: " + sessionId);
+        }
+        if (session.getCurrentRoundId() == null) {
+            List<InterviewRoundEntity> rounds = listBySession(sessionId);
+            return rounds.isEmpty() ? null : rounds.get(rounds.size() - 1);
+        }
+        InterviewRoundEntity round = roundMapper.selectById(session.getCurrentRoundId());
+        if (round == null || !sessionId.equals(round.getSessionId())) {
+            throw new BizException(ErrorCode.SESSION_ROUND_CONFLICT, "当前轮次不存在或不属于本场面试");
+        }
+        return round;
+    }
+
+    @Override
+    @Transactional
+    public void setCurrentRound(Long sessionId, Long roundId) {
+        if (sessionMapper.updateCurrentRound(sessionId, roundId) != 1) {
+            throw new BizException(ErrorCode.SESSION_ROUND_CONFLICT, "无法更新当前轮次: " + roundId);
+        }
     }
 
     @Override

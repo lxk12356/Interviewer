@@ -195,7 +195,7 @@ class InterviewWebSocketHandlerTest {
     void answer_duplicateRoundId_rejected() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
         when(engine.isEnabled()).thenReturn(true);
-        when(roundService.listBySession(32L)).thenReturn(List.of(answeredRound(101L, 1, "已回答")));
+        when(roundService.getCurrentRound(32L)).thenReturn(answeredRound(101L, 1, "已回答"));
 
         handler.handleTextMessage(
                 session,
@@ -211,7 +211,7 @@ class InterviewWebSocketHandlerTest {
     void answer_firstSubmitRoundId_ok() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
         when(engine.isEnabled()).thenReturn(true);
-        when(roundService.listBySession(32L)).thenReturn(List.of(unansweredRound(101L, 1)));
+        when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(101L, 1));
 
         handler.handleTextMessage(
                 session, new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\",\"roundId\":101}"));
@@ -239,6 +239,7 @@ class InterviewWebSocketHandlerTest {
     void reconnect_engineEnabled_resumed_replaysCurrentQuestion() throws Exception {
         stubConnection();
         when(roundService.listBySession(32L)).thenReturn(List.of(unansweredRound(101L, 1)));
+        when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(101L, 1));
         when(engine.isEnabled()).thenReturn(true);
         when(engine.resumeInterview(32L)).thenReturn(InterviewWorkflowEngine.ResumeResult.RESUMED);
 
@@ -255,6 +256,7 @@ class InterviewWebSocketHandlerTest {
     void reconnect_engineEnabled_rebuiltFromDb_replays() throws Exception {
         stubConnection();
         when(roundService.listBySession(32L)).thenReturn(List.of(unansweredRound(101L, 1)));
+        when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(101L, 1));
         when(engine.isEnabled()).thenReturn(true);
         when(engine.resumeInterview(32L))
                 .thenReturn(InterviewWorkflowEngine.ResumeResult.REBUILT_FROM_DB);
@@ -496,5 +498,46 @@ class InterviewWebSocketHandlerTest {
         // 必须把当前关闭的 session 传给 unregister，SessionManager 才能按身份移除，
         // 避免旧连接关闭回调把新注册的活跃连接误删
         verify(sessionManager).unregister(32L, session);
+    }
+
+    @Test
+    void answer_rejectsNonCurrentRound_evenIfUnanswered() throws Exception {
+        setStatus(SessionStatus.IN_PROGRESS);
+        when(engine.isEnabled()).thenReturn(true);
+        when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(102L, 2));
+        handler.handleTextMessage(
+                session,
+                new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答旧题\",\"roundId\":101}"));
+        verify(engine, never()).submitAnswer(any(), any());
+        assertEquals(ErrorCode.SESSION_ROUND_CONFLICT.getCode(), lastSent().get("code").asInt());
+    }
+
+    @Test
+    void reconnect_usesFreshBookmarkAndPreservesFollowUpMetadata() throws Exception {
+        stubConnection();
+        when(roundService.listBySession(32L)).thenReturn(List.of(unansweredRound(101L, 1)));
+        when(engine.isEnabled()).thenReturn(true);
+        when(engine.resumeInterview(32L))
+                .thenReturn(InterviewWorkflowEngine.ResumeResult.REBUILT_FROM_DB);
+        var pending = unansweredRound(102L, null);
+        pending.setParentSeq(1);
+        pending.setFollowUpIndex(2);
+        pending.setFollowUpType("CLARIFY");
+        when(roundService.getCurrentRound(32L)).thenReturn(pending);
+        handler.afterConnectionEstablished(session);
+        ArgumentCaptor<TextMessage> messages = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, atLeastOnce()).sendMessage(messages.capture());
+        boolean found = false;
+        for (TextMessage message : messages.getAllValues()) {
+            var json = objectMapper.readTree(message.getPayload());
+            if ("QUESTION_START".equals(json.path("type").asText())) {
+                assertEquals(102L, json.path("roundId").asLong());
+                assertEquals(1, json.path("parentSeq").asInt());
+                assertEquals(2, json.path("followUpIndex").asInt());
+                assertEquals("CLARIFY", json.path("followUpType").asText());
+                found = true;
+            }
+        }
+        assertTrue(found);
     }
 }

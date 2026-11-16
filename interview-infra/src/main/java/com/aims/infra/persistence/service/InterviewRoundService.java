@@ -22,6 +22,12 @@ public interface InterviewRoundService {
             int parentSeq,
             int followUpIndex);
 
+    /** 当前轮次（可能已答）；旧会话没有书签时仅回退到业务顺序最后一轮。 */
+    InterviewRoundEntity getCurrentRound(Long sessionId);
+
+    /** 更新会话当前轮次，轮次必须属于该会话。 */
+    void setCurrentRound(Long sessionId, Long roundId);
+
     /** 更新轮次回答。 */
     InterviewRoundEntity updateAnswer(Long roundId, String answer);
 

@@ -445,4 +445,87 @@ class StatePersistenceServiceTest {
         assertEquals("问题1", state.qaHistory().get(0).question());
         assertEquals("答案1", state.qaHistory().get(0).answer());
     }
+
+    @Test
+    void rebuildFromDb_restoresCurrentPendingFollowUpOnly() {
+        InterviewSessionEntity entity = mockSessionEntity(1L);
+        entity.setCurrentRoundId(102L);
+        when(sessionService.getById(1L)).thenReturn(entity);
+        InterviewRoundEntity main = round(100L, 3, null, null, "已回答");
+        InterviewRoundEntity old = round(101L, null, 2, 1, null);
+        InterviewRoundEntity pending = round(102L, null, 3, 2, null);
+        pending.setFollowUpType("DEEPEN");
+        when(roundService.listBySession(1L)).thenReturn(List.of(old, main, pending));
+        when(roundService.getCurrentRound(1L)).thenReturn(pending);
+
+        InterviewState state = service.rebuildFromDb(1L);
+        assertEquals(102L, state.pendingRound().roundId());
+        assertEquals(3, state.pendingRound().mainSeq());
+        assertEquals(2, state.pendingRound().followUpIndex());
+        assertEquals(1, state.qaHistory().size());
+        assertEquals(3, state.currentSeq());
+    }
+
+    @Test
+    void rebuildFromDb_doesNotResurrectOldPendingWhenCurrentIsAnswered() {
+        when(sessionService.getById(1L)).thenReturn(mockSessionEntity(1L));
+        var old = round(101L, null, 1, 1, null);
+        var current = round(102L, 2, null, null, "已答");
+        when(roundService.listBySession(1L)).thenReturn(List.of(old, current));
+        when(roundService.getCurrentRound(1L)).thenReturn(current);
+        org.junit.jupiter.api.Assertions.assertNull(service.rebuildFromDb(1L).pendingRound());
+    }
+
+    @Test
+    void rebuildFromDb_restoresPendingMainById() {
+        when(sessionService.getById(1L)).thenReturn(mockSessionEntity(1L));
+        var pending = round(103L, 3, null, null, null);
+        when(roundService.listBySession(1L)).thenReturn(List.of(pending));
+        when(roundService.getCurrentRound(1L)).thenReturn(pending);
+        var state = service.rebuildFromDb(1L);
+        assertEquals(103L, state.pendingRound().roundId());
+        assertEquals(3, state.pendingRound().seq());
+    }
+
+    @Test
+    void syncFromState_repeatedRecoveryKeepsSameRoundAndBookmark() {
+        var pending = round(103L, null, 3, 2, null);
+        when(roundService.listBySession(1L)).thenReturn(List.of(pending));
+        var state =
+                new InterviewState(
+                        Map.of(
+                                InterviewState.CURRENT_SEQ,
+                                3,
+                                InterviewState.CURRENT_QUESTION,
+                                "原题",
+                                InterviewState.CURRENT_ANSWER,
+                                "",
+                                InterviewState.PENDING_FOLLOW_UP,
+                                true,
+                                InterviewState.PARENT_SEQ,
+                                3,
+                                InterviewState.FOLLOW_UP_INDEX,
+                                2,
+                                InterviewState.SESSION_STATUS,
+                                SessionStatus.IN_PROGRESS));
+        service.syncFromState(1L, state);
+        service.syncFromState(1L, state);
+        verify(roundService, org.mockito.Mockito.times(2)).setCurrentRound(1L, 103L);
+        verify(roundService, never()).createRound(anyLong(), anyInt(), anyString());
+        verify(roundService, never())
+                .createRound(anyLong(), any(), anyString(), any(), anyInt(), anyInt());
+    }
+
+    private InterviewRoundEntity round(
+            Long id, Integer seq, Integer parentSeq, Integer index, String answer) {
+        var r = new InterviewRoundEntity();
+        r.setId(id);
+        r.setSessionId(1L);
+        r.setSeq(seq);
+        r.setParentSeq(parentSeq);
+        r.setFollowUpIndex(index);
+        r.setQuestion("原题");
+        r.setAnswer(answer);
+        return r;
+    }
 }

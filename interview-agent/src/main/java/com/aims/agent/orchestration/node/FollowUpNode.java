@@ -93,6 +93,7 @@ public class FollowUpNode extends AbstractNode<InterviewState> {
 
         Map<String, Object> updates = new HashMap<>();
         updates.put(InterviewState.CURRENT_QUESTION, question);
+        updates.put(InterviewState.CURRENT_ROUND_ID, null);
         updates.put(InterviewState.QUESTIONS_ASKED, question);
         updates.put(InterviewState.FOLLOW_UP_INDEX, newIndex);
         updates.put(InterviewState.FOLLOW_UP_TYPE, decision.followUpType());

@@ -5,6 +5,7 @@ import com.aims.core.interview.ConflictDetail;
 import com.aims.core.interview.FollowUpType;
 import com.aims.core.interview.InterviewPlan;
 import com.aims.core.interview.InterviewerPersona;
+import com.aims.core.interview.PendingRound;
 import com.aims.core.interview.QaPair;
 import com.aims.core.session.SessionStatus;
 import com.aims.infra.persistence.entity.InterviewRoundEntity;
@@ -208,7 +209,8 @@ public class StatePersistenceService {
                     && state.parentSeq() != null
                     && state.followUpIndex() != null) {
                 String key = state.parentSeq() + ":" + state.followUpIndex();
-                if (!followUpByKey.containsKey(key)) {
+                InterviewRoundEntity pending = followUpByKey.get(key);
+                if (pending == null) {
                     roundService.createRound(
                             sessionId,
                             null,
@@ -217,12 +219,17 @@ public class StatePersistenceService {
                             state.parentSeq(),
                             state.followUpIndex());
                     log.debug("syncFromState 预创建追问轮次 sessionId={} key={}", sessionId, key);
+                } else {
+                    roundService.setCurrentRound(sessionId, pending.getId());
                 }
             } else {
                 int seq = state.currentSeq();
-                if (!mainBySeq.containsKey(seq)) {
+                InterviewRoundEntity pending = mainBySeq.get(seq);
+                if (pending == null) {
                     roundService.createRound(sessionId, seq, pendingQuestion);
                     log.debug("syncFromState 预创建主问题轮次 sessionId={} seq={}", sessionId, seq);
+                } else {
+                    roundService.setCurrentRound(sessionId, pending.getId());
                 }
             }
         }
@@ -279,10 +286,7 @@ public class StatePersistenceService {
         List<QaPair> qaHistory = new ArrayList<>();
         Map<String, List<ConflictDetail>> conflictsByRound = new HashMap<>();
         int currentSeq = 0;
-        // P12：记录"已落库但未作答"的主问题轮次。checkpoint 丢失后图只能从 START 重跑，
-        // 若不把该题面带回 State，QuestionNode 会重新调模型出一道新题，
-        // 与 DB 里预落库的题面不一致 ⇒ 候选人按新题作答、答案却记在旧题那一行。
-        InterviewRoundEntity pendingMain = null;
+        InterviewRoundEntity currentRound = roundService.getCurrentRound(sessionId);
         for (InterviewRoundEntity r : rounds) {
             // v1.1-F4：读回矛盾点（key=主问题 seq 或 "seq:followUpIndex"）
             List<ConflictDetail> roundConflicts = ConflictDetailsJson.parse(r.getConflictDetails());
@@ -294,19 +298,6 @@ public class StatePersistenceService {
                         roundConflicts);
             }
             if (r.getAnswer() == null || r.getAnswer().isBlank()) {
-                // 未作答轮次：主问题记为待答题面；追问目前无法恢复到"追问等待点"，只记告警（见类注释局限）
-                if (r.getSeq() != null) {
-                    if (pendingMain == null || r.getSeq() > pendingMain.getSeq()) {
-                        pendingMain = r;
-                    }
-                } else {
-                    log.warn(
-                            "断线重建：待答轮次为追问（parentSeq={} followUpIndex={}），"
-                                    + "无法恢复到追问等待点，将推进到下一主问题 sessionId={}",
-                            r.getParentSeq(),
-                            r.getFollowUpIndex(),
-                            sessionId);
-                }
                 continue;
             }
             if (r.getSeq() != null) {
@@ -335,15 +326,18 @@ public class StatePersistenceService {
         data.put(InterviewState.CURRENT_SEQ, currentSeq);
         data.put(InterviewState.QA_HISTORY, qaHistory);
         data.put(InterviewState.CONFLICT_DETAILS_BY_ROUND, conflictsByRound);
-        // P12：把 DB 里未作答的主问题题面带回 State，交给 QuestionNode 复用（见 PENDING_QUESTION 注释）
-        if (pendingMain != null) {
-            data.put(InterviewState.PENDING_QUESTION, pendingMain.getQuestion());
-            data.put(InterviewState.PENDING_QUESTION_SEQ, pendingMain.getSeq());
-            log.info(
-                    "断线重建恢复待答题面 sessionId={} seq={} questionLen={}",
-                    sessionId,
-                    pendingMain.getSeq(),
-                    pendingMain.getQuestion() != null ? pendingMain.getQuestion().length() : 0);
+        // 仅恢复书签指向的未答轮次，不回头拾取历史遗留的未答追问。
+        if (currentRound != null
+                && (currentRound.getAnswer() == null || currentRound.getAnswer().isBlank())) {
+            data.put(
+                    InterviewState.PENDING_ROUND,
+                    new PendingRound(
+                            currentRound.getId(),
+                            currentRound.getQuestion(),
+                            currentRound.getSeq(),
+                            currentRound.getParentSeq(),
+                            currentRound.getFollowUpIndex(),
+                            FollowUpType.fromString(currentRound.getFollowUpType())));
         }
         data.put(InterviewState.FOLLOW_UP_COUNT, 0);
         data.put(InterviewState.ROUND_EVALUATIONS, new ArrayList<>());

@@ -13,6 +13,13 @@ import org.apache.ibatis.annotations.Update;
 /** 面试会话 Mapper。 */
 public interface InterviewSessionMapper extends BaseMapper<InterviewSessionEntity> {
 
+    /** 仅允许指向当前会话内的轮次，避免跨会话错配。 */
+    @Update(
+            "UPDATE interview_session SET current_round_id = #{roundId}, updated_at = now()"
+                    + " WHERE id = #{sessionId} AND EXISTS (SELECT 1 FROM interview_round"
+                    + " WHERE id = #{roundId} AND session_id = #{sessionId})")
+    int updateCurrentRound(@Param("sessionId") Long sessionId, @Param("roundId") Long roundId);
+
     /** 保存面试计划 JSON（plan_json 为 JSONB 类型，需 ::jsonb 转型）。 */
     @Update(
             "UPDATE interview_session SET plan_json = #{planJson}::jsonb, updated_at = now()"
@@ -28,8 +35,7 @@ public interface InterviewSessionMapper extends BaseMapper<InterviewSessionEntit
     /**
      * 记录评估/报告失败原因（evaluation_error）。
      *
-     * <p>该列自 V2_0_6 建表起一直没有写入方，导致"评估失败"在库里只剩一个 FAILED 状态词、
-     * 查不到任何原因。失败原因只存异常消息摘要（调用方截断 500 字），不存堆栈。
+     * <p>该列自 V2_0_6 建表起一直没有写入方，导致"评估失败"在库里只剩一个 FAILED 状态词、 查不到任何原因。失败原因只存异常消息摘要（调用方截断 500 字），不存堆栈。
      */
     @Update(
             "UPDATE interview_session SET evaluation_error = #{error}, updated_at = now() WHERE"
@@ -48,11 +54,9 @@ public interface InterviewSessionMapper extends BaseMapper<InterviewSessionEntit
      * <p>语义：{@code evaluated_rounds = LEAST(已评分的不同轮次数, 应评轮次总数)}。
      *
      * <ul>
-     *   <li>用 {@code COUNT(DISTINCT round_id)} 而不是 {@code COUNT(*)}：评分表没有唯一约束，
-     *       历史上的重复行不会把进度算多；
+     *   <li>用 {@code COUNT(DISTINCT round_id)} 而不是 {@code COUNT(*)}：评分表没有唯一约束， 历史上的重复行不会把进度算多；
      *   <li>用 {@code LEAST(..., total_rounds_to_evaluate)}：脏数据导致统计超过总数时不会越界；
-     *   <li><b>幂等</b>：重复执行结果相同，所以某一轮刷新失败后，下一轮（或收尾的兜底刷新）
-     *       会自动把进度补正 —— 不需要为"写评分 + 推进度"引入事务。
+     *   <li><b>幂等</b>：重复执行结果相同，所以某一轮刷新失败后，下一轮（或收尾的兜底刷新） 会自动把进度补正 —— 不需要为"写评分 + 推进度"引入事务。
      * </ul>
      */
     @Update(

@@ -296,7 +296,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                     }
                     case RESUMED, REBUILT_FROM_DB -> {
                         // 补发当前待答题（DB 由 syncFromState 预落库，保证有数据可补发）
-                        replayCurrentQuestion(session, sessionId, rounds);
+                        replayCurrentQuestion(session, sessionId);
                     }
                 }
             } catch (Exception e) {
@@ -361,14 +361,18 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
-     * 补发当前待答题（断线重连恢复）：从 DB 读取最后一条轮次，按主问题/追问格式重放 WS 消息。
+     * 补发当前待答题：恢复完成后按会话书签重新读取 DB，按主问题/追问格式重放 WS 消息。
      *
      * <p>Engine 路径与旧链路补发共用。DB 轮次由 {@code syncFromState} 预落库（CURRENT_QUESTION 非空且 CURRENT_ANSWER
      * 为空时预创建），保证重连时有数据可补发。
      */
-    private void replayCurrentQuestion(
-            WebSocketSession session, Long sessionId, List<InterviewRoundEntity> rounds) {
-        InterviewRoundEntity lastRound = rounds.get(rounds.size() - 1);
+    private void replayCurrentQuestion(WebSocketSession session, Long sessionId) {
+        // 必须在 Engine 恢复完成后重新读取书签，避免使用恢复前的旧列表。
+        InterviewRoundEntity lastRound = roundService.getCurrentRound(sessionId);
+        if (lastRound == null
+                || (lastRound.getAnswer() != null && !lastRound.getAnswer().isBlank())) {
+            throw new IllegalStateException("没有可补发的当前待答轮次");
+        }
         log.info("重连补发当前问题 sessionId={} roundId={}", sessionId, lastRound.getId());
         // 追问补发：携带 parentSeq + followUpIndex
         if (lastRound.getParentSeq() != null) {
@@ -805,14 +809,21 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                             "回答内容超过 " + MAX_ANSWER_LENGTH + " 字符"));
             return;
         }
-        // FE.12 P7 幂等兜底：连点提交时同一 roundId 已被第一次消费落库（syncFromState 幂等写回答），
-        // 按 roundId 已答即拒绝，避免第二次回答错配到新题。roundId 为 null（旧客户端）时跳过校验。
-        if (roundId != null && isRoundAnswered(sessionId, roundId)) {
-            log.warn("重复提交回答被拒绝 sessionId={} roundId={}", sessionId, roundId);
-            send(session, WsOutbound.error(ErrorCode.SESSION_ROUND_CONFLICT.getCode(), "请勿重复提交回答"));
-            return;
-        }
         try {
+            // roundId 为 null 时兼容旧客户端；显式 ID 必须匹配当前未答轮次。
+            if (roundId != null) {
+                InterviewRoundEntity current = roundService.getCurrentRound(sessionId);
+                if (current == null
+                        || !roundId.equals(current.getId())
+                        || (current.getAnswer() != null && !current.getAnswer().isBlank())) {
+                    send(
+                            session,
+                            WsOutbound.error(
+                                    ErrorCode.SESSION_ROUND_CONFLICT.getCode(),
+                                    "回答对应的题目已变化或已提交，请刷新当前题目"));
+                    return;
+                }
+            }
             engine.submitAnswer(sessionId, text);
             log.info("回答已提交（Engine）sessionId={}", sessionId);
         } catch (Exception e) {
@@ -823,15 +834,6 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                             ErrorCode.INTERNAL_ERROR.getCode(),
                             "Engine 处理回答失败: " + e.getMessage()));
         }
-    }
-
-    /** FE.12 P7：按 roundId 查询轮次是否已回答（轮次不存在视为未回答，放行不误伤）。 */
-    private boolean isRoundAnswered(Long sessionId, Long roundId) {
-        return roundService.listBySession(sessionId).stream()
-                .filter(r -> roundId.equals(r.getId()))
-                .findFirst()
-                .map(r -> r.getAnswer() != null && !r.getAnswer().isBlank())
-                .orElse(false);
     }
 
     /**
