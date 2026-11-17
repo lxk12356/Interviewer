@@ -121,7 +121,7 @@ class InterviewWorkflowEngineTest {
         ReflectionTestUtils.setField(engine, "evaluationMessageProducer", producer);
         ReflectionTestUtils.setField(engine, "sessionStore", sessionStore);
 
-        // checkpoint 存在 + noInterrupt graph mock
+        // checkpoint 已到 END：只补偿评估，不重新执行图。
         Checkpoint cp =
                 Checkpoint.builder()
                         .id("c1")
@@ -137,9 +137,6 @@ class InterviewWorkflowEngineTest {
                         SessionStatus.IN_PROGRESS,
                         SessionStatus.PAUSED))
                 .thenReturn(true);
-        @SuppressWarnings("unchecked")
-        CompiledGraph<InterviewState> noInterrupt = mock(CompiledGraph.class);
-        when(graphFactory.compile(any())).thenReturn(noInterrupt);
 
         engine.finishInterview(600L);
 
@@ -155,6 +152,29 @@ class InterviewWorkflowEngineTest {
         verify(producer).sendEvaluationRequest(600L);
         verify(sessionService, never()).updateStatus(600L, SessionStatus.COMPLETED);
         verify(sessionService, never()).markEnded(600L);
+    }
+
+    @Test
+    @DisplayName("结束恢复未到 END 时保留 checkpoint，不触发评估")
+    void finishInterview_stillPaused_doesNotEvaluateOrRelease() throws Exception {
+        Checkpoint paused =
+                Checkpoint.builder()
+                        .id("still-paused")
+                        .nodeId("ask")
+                        .nextNodeId("answer")
+                        .state(Map.of(InterviewState.SESSION_ID, 601L))
+                        .build();
+        when(checkpointSaver.get(any())).thenReturn(Optional.of(paused));
+        @SuppressWarnings("unchecked")
+        CompiledGraph<InterviewState> graph = mock(CompiledGraph.class);
+        ReflectionTestUtils.setField(engine, "compiledGraph", graph);
+
+        assertThrows(IllegalStateException.class, () -> engine.finishInterview(601L));
+
+        verify(checkpointSaver, never()).release(any());
+        verify(statePersistenceService, never()).syncFromState(any(), any());
+        verify(sessionService, never()).updateEvaluationStatus(anyLong(), any());
+        verify(graphFactory, never()).compile(any());
     }
 
     @Test
@@ -289,9 +309,6 @@ class InterviewWorkflowEngineTest {
                         SessionStatus.IN_PROGRESS,
                         SessionStatus.PAUSED))
                 .thenReturn(true);
-        @SuppressWarnings("unchecked")
-        CompiledGraph<InterviewState> noInterrupt = mock(CompiledGraph.class);
-        when(graphFactory.compile(any())).thenReturn(noInterrupt);
 
         engine.finishInterview(900L);
 
@@ -348,9 +365,6 @@ class InterviewWorkflowEngineTest {
                         SessionStatus.IN_PROGRESS,
                         SessionStatus.PAUSED))
                 .thenReturn(true);
-        @SuppressWarnings("unchecked")
-        CompiledGraph<InterviewState> noInterrupt = mock(CompiledGraph.class);
-        when(graphFactory.compile(any())).thenReturn(noInterrupt);
 
         engine.finishInterview(920L);
 

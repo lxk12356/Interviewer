@@ -33,8 +33,7 @@ import org.springframework.stereotype.Component;
 /**
  * 面试流程 StateGraph 工厂。
  *
- * <p>构建完整面试流程的有向图，包含 7 个节点（plan→ask→answer→followUpDecision→summary→endCheck），2
- * 条条件边（追问决策路由、结束判断循环路由），所有业务节点通过 {@link FaultTolerantNode} 包装。
+ * <p>构建完整面试流程的有向图，通过回答出口、追问决策和结束检查三处条件路由控制流程。 所有业务节点通过 {@link FaultTolerantNode} 包装。
  *
  * <p>评估（evaluate）与报告（report）已移至 Kafka 链路（面试结束后由 {@code EvaluationConsumer}/{@code ReportConsumer} 从
  * DB 统一评估并落库），故不注册在图内。
@@ -42,17 +41,20 @@ import org.springframework.stereotype.Component;
  * <h2>图拓扑</h2>
  *
  * <pre>
- *   START → plan → ask → answer → followUpDecision
- *                      ↑      ├─ followUp → answer（追问回环，interruptBefore(ANSWER) 暂停等待追问回答）
- *                      │      └─ summary → supervise → endCheck
- *                      │                        ├─ ask (循环回提问)
- *                      └────────────────────────┘
- *                      endCheck ──（达上限/FINISH/supervisor=END/错误）──> END
+ *   START → plan → ask → answer
+ *   answer ──正常──> followUpDecision
+ *   answer ──forceEnd/lastError──> endCheck → END
+ *   followUpDecision ──追问──> followUp → answer
+ *   followUpDecision ──不追问──> summary → supervise（可选）→ endCheck
+ *   endCheck ──继续──> ask
+ *   endCheck ──结束──> END
+ *   ask/followUp → answer：进入 answer 前暂停，等待回答或结束恢复。
  * </pre>
  *
  * <h2>条件边路由</h2>
  *
  * <ul>
+ *   <li>answer → endCheck（forceEnd 或 lastError）| followUpDecision（正常回答）
  *   <li>followUpDecision → followUp（shouldFollowUp 且未达上限）| summary（否则）
  *   <li>endCheck → END（达上限、forceEnd、supervisor=END 或 lastError）| ask（循环）
  * </ul>
@@ -178,7 +180,13 @@ public class InterviewGraphFactory {
         graph.addEdge(START, NodeNames.PLAN);
         graph.addEdge(NodeNames.PLAN, NodeNames.ASK);
         graph.addEdge(NodeNames.ASK, NodeNames.ANSWER);
-        graph.addEdge(NodeNames.ANSWER, NodeNames.FOLLOW_UP_DECISION);
+        // 结束恢复直接进入结束检查，不再调用追问、摘要或总指挥。
+        graph.addConditionalEdges(
+                NodeNames.ANSWER,
+                AsyncEdgeAction.edge_async(this::routeAfterAnswer),
+                Map.of(
+                        NodeNames.END_CHECK, NodeNames.END_CHECK,
+                        NodeNames.FOLLOW_UP_DECISION, NodeNames.FOLLOW_UP_DECISION));
         // 追问回环：followUp 生成追问问题后回到 ANSWER 等待候选人回答
         // （interruptBefore(ANSWER) 为节点级中断，ask→answer 与 followUp→answer 两条入边均会暂停）
         graph.addEdge(NodeNames.FOLLOW_UP, NodeNames.ANSWER);
@@ -252,6 +260,13 @@ public class InterviewGraphFactory {
     }
 
     // ─── 条件边路由方法（package-private，可独立单元测试）───
+
+    String routeAfterAnswer(InterviewState state) {
+        if (state.lastError() != null || state.forceEnd()) {
+            return NodeNames.END_CHECK;
+        }
+        return NodeNames.FOLLOW_UP_DECISION;
+    }
 
     /**
      * 追问决策后的条件边路由。

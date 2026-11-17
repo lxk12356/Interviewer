@@ -24,16 +24,13 @@ public class AnswerNode extends AbstractNode<InterviewState> {
 
     @Override
     public Map<String, Object> apply(InterviewState state) throws Exception {
+        // 结束恢复不消费残留回答，避免出题失败后把上一轮答案重复追加到 QA_HISTORY。
+        if (state.forceEnd() || state.lastError() != null) {
+            log.info("结束恢复，跳过回答收集 sessionId={} seq={}", state.sessionId(), state.currentSeq());
+            return Map.of();
+        }
         String answer = state.currentAnswer();
         if (answer == null || answer.isBlank()) {
-            // FINISH 强制结束：暂停点尚无回答，跳过 QA 收集，让流程走到 endCheck → report
-            if (state.forceEnd()) {
-                log.info(
-                        "forceEnd 跳过空回答 sessionId={} seq={}",
-                        state.sessionId(),
-                        state.currentSeq());
-                return Map.of();
-            }
             throw new IllegalStateException("AnswerNode 收到空回答");
         }
 

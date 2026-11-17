@@ -133,7 +133,7 @@ public class InterviewWorkflowEngine {
      * Redis，syncFromState 把 question 同步到 DB。
      *
      * @param sessionId 面试 sessionId
-     * @return true=本次新启动（已推送首题流式）；false=已有 checkpoint（复用，未推流，需 Handler 补发，P4）
+     * @return true=已执行启动或统一收尾，无需补发；false=复用正常待答 checkpoint，需 Handler 补发
      * @throws Exception Graph 执行异常
      */
     public boolean startInterview(Long sessionId) throws Exception {
@@ -150,9 +150,14 @@ public class InterviewWorkflowEngine {
                     "startInterview 已有 checkpoint，跳过重跑（P4 幂等）sessionId={} seq={}",
                     sessionId,
                     existing.currentSeq());
+            if (finishIfRequired(sessionId, existing)) {
+                incrementExecution("startInterview", "success");
+                return true; // 已进入收尾，Handler 不应补发待答题。
+            }
             // 补偿上次失败的落库（syncFromState 按 seq/followUpIndex 幂等，不重复创建）
             statePersistenceService.syncFromState(sessionId, existing);
             updateRoundGauge(existing);
+
             sessionService.tryTransitionTo(
                     sessionId,
                     SessionStatus.IN_PROGRESS,
@@ -169,6 +174,10 @@ public class InterviewWorkflowEngine {
 
         // Graph 暂停后，从 checkpoint 加载最新 state，同步到 DB
         InterviewState pausedState = loadStateFromCheckpoint(config);
+        if (finishIfRequired(sessionId, pausedState)) {
+            incrementExecution("startInterview", "success");
+            return true;
+        }
         if (pausedState != null) {
             statePersistenceService.syncFromState(sessionId, pausedState);
             updateRoundGauge(pausedState);
@@ -227,12 +236,21 @@ public class InterviewWorkflowEngine {
             throw new IllegalStateException("无 checkpoint，无法提交回答: sessionId=" + sessionId);
         }
 
+        if (finishIfRequired(sessionId, pausedState)) {
+            incrementExecution("submitAnswer", "success");
+            return;
+        }
+
         // 从 checkpoint 断点恢复：answer 经 resume 更新数据合并进 checkpoint state，由 ANSWER 节点消费。
         // 不可用 invoke(Map)——那是 GraphArgs 语义，会从 START 重跑并丢失回答。
         compiledGraph.invoke(
                 GraphInput.resume(Map.of(InterviewState.CURRENT_ANSWER, answer)), config);
 
         InterviewState newState = loadStateFromCheckpoint(config);
+        if (finishIfRequired(sessionId, newState)) {
+            incrementExecution("submitAnswer", "success");
+            return;
+        }
         if (newState != null) {
             statePersistenceService.syncFromState(sessionId, newState);
             updateRoundGauge(newState);
@@ -241,10 +259,6 @@ public class InterviewWorkflowEngine {
                     sessionId,
                     newState.currentSeq(),
                     newState.qaHistory().size());
-            // 面试结束（图走到 END，而非"下一题已生成"）→ 触发 Kafka 异步评估（FE.04）
-            if (isInterviewFinished(sessionId)) {
-                triggerEvaluationViaEngine(sessionId);
-            }
         }
         incrementExecution("submitAnswer", "success");
     }
@@ -252,8 +266,8 @@ public class InterviewWorkflowEngine {
     /**
      * 结束面试：设置 FORCE_END → 执行到 END。
      *
-     * <p>用 {@link GraphInput#resume(Map)} 把 FORCE_END=true 合并进 checkpoint state，用无 interrupt 的
-     * graph 从中断点继续执行到 END（生成报告）。暂停点无回答时 AnswerNode 检测到 forceEnd 会跳过 QA 收集。
+     * <p>用 {@link GraphInput#resume(Map)} 把 FORCE_END=true 合并进 checkpoint state，复用原图从暂停点 继续。ANSWER
+     * 跳过 QA 收集，其条件边直接进入 END_CHECK → END，随后触发异步评估。
      *
      * @param sessionId 面试 sessionId
      * @throws Exception Graph 执行异常
@@ -268,16 +282,17 @@ public class InterviewWorkflowEngine {
             incrementExecution("finishInterview", "error");
             throw new IllegalStateException("无 checkpoint，无法结束: sessionId=" + sessionId);
         }
-
-        // 用无 interrupt 的 graph 从 checkpoint 断点恢复执行到 END
-        CompiledGraph<InterviewState> noInterrupt = graphFactory.compile(checkpointSaver);
-        noInterrupt.invoke(GraphInput.resume(Map.of(InterviewState.FORCE_END, true)), config);
+        // resume 会越过当前等待点；ANSWER 的结束分支不会再次走回等待回答的路径。
+        if (!isInterviewFinished(sessionId)) {
+            compiledGraph.invoke(GraphInput.resume(Map.of(InterviewState.FORCE_END, true)), config);
+        }
 
         InterviewState finalState = loadStateFromCheckpoint(config);
-        if (finalState != null) {
-            statePersistenceService.syncFromState(sessionId, finalState);
-            updateRoundGauge(finalState);
+        if (finalState == null || !isInterviewFinished(sessionId)) {
+            throw new IllegalStateException("结束恢复未到达 END: sessionId=" + sessionId);
         }
+        statePersistenceService.syncFromState(sessionId, finalState);
+        updateRoundGauge(finalState);
         // 转 EVALUATING + 发 Kafka，异步评估/报告（COMPLETED 由 ReportConsumer 设置，FE.04）
         triggerEvaluationViaEngine(sessionId);
         incrementExecution("finishInterview", "success");
@@ -334,7 +349,7 @@ public class InterviewWorkflowEngine {
      * <ul>
      *   <li>checkpoint 不存在（Redis 过期/清理/start 执行一半失败）-&gt; 降级 {@link
      *       StatePersistenceService#rebuildFromDb} 重建 state，invoke 重跑写入新 checkpoint
-     *   <li>checkpoint 存在且 nextNodeId == END -&gt; 面试已结束，触发评估（幂等）
+     *   <li>checkpoint 已到 END，或带 lastError/forceEnd -&gt; 统一收尾并触发评估（幂等）
      *   <li>checkpoint 存在且暂停在 ANSWER 前 -&gt; 正常恢复，由 Handler 从 DB 补发当前待答题
      * </ul>
      *
@@ -357,6 +372,10 @@ public class InterviewWorkflowEngine {
             // interruptBefore(ANSWER) 暂停后写入新 checkpoint（syncFromState 按 seq/followUpIndex 幂等落库）
             compiledGraph.invoke(state.data(), config);
             InterviewState resumedState = loadStateFromCheckpoint(config);
+            if (finishIfRequired(sessionId, resumedState)) {
+                incrementExecution("resumeInterview", "success");
+                return ResumeResult.FINISHED;
+            }
             if (resumedState != null) {
                 statePersistenceService.syncFromState(sessionId, resumedState);
                 updateRoundGauge(resumedState);
@@ -365,10 +384,8 @@ public class InterviewWorkflowEngine {
             return ResumeResult.REBUILT_FROM_DB;
         }
 
-        // 2. 面试已结束（checkpoint nextNodeId == END）-> 触发评估（tryTransitionTo 保证幂等）
-        if (isInterviewFinished(sessionId)) {
-            log.info("重连时发现面试已结束，触发评估 sessionId={}", sessionId);
-            triggerEvaluationViaEngine(sessionId);
+        // 2. 已结束或带错误/结束标记的 checkpoint 统一收尾，不能补发失败的待答题。
+        if (finishIfRequired(sessionId, state)) {
             incrementExecution("resumeInterview", "success");
             return ResumeResult.FINISHED;
         }
@@ -450,6 +467,35 @@ public class InterviewWorkflowEngine {
     }
 
     // ─── 内部方法 ───
+
+    /**
+     * invoke 在 ANSWER 前暂停也会返回。错误状态不能当成正常待答态，需主动 resume 收尾。 同时覆盖启动、提交回答、重连及 DB 重建；已到 END
+     * 时只做持久化和幂等评估触发。
+     */
+    private boolean finishIfRequired(Long sessionId, InterviewState state) throws Exception {
+        if (state == null) {
+            return false;
+        }
+        boolean finished = isInterviewFinished(sessionId);
+        if (state.lastError() == null && !state.forceEnd() && !finished) {
+            return false;
+        }
+        log.info(
+                "图进入统一收尾 sessionId={} forceEnd={} lastError={}",
+                sessionId,
+                state.forceEnd(),
+                state.lastError());
+        // 首次出题失败时会话仍可能是 PLANNING，先完成启动状态转移才能进入评估。
+        if (!finished) {
+            sessionService.tryTransitionTo(
+                    sessionId,
+                    SessionStatus.IN_PROGRESS,
+                    SessionStatus.PLANNING,
+                    SessionStatus.PLANNING);
+        }
+        finishInterview(sessionId);
+        return true;
+    }
 
     /**
      * 释放 Redis checkpoint（P3，容错：释放失败仅告警，不影响业务状态转移）。
