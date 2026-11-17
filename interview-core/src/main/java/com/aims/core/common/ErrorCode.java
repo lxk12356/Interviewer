@@ -38,6 +38,7 @@ public enum ErrorCode {
     SESSION_LOCKED(4105, "会话已被其他连接占用"),
     SESSION_MESSAGE_INVALID(4106, "WebSocket 消息格式或内容非法"),
     POSITION_NOT_SET(4107, "该面试未指定岗位，无法生成计划"),
+    SESSION_BUSY(4108, "当前面试正在处理，请稍后重试"),
 
     // ---- 评估报告 4200+（P4） ----
     EVALUATION_FAILED(4201, "评估失败"),

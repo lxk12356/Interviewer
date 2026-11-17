@@ -131,7 +131,8 @@ class InterviewTerminationIntegrationTest {
                         null,
                         producer,
                         null,
-                        connections);
+                        connections,
+                        new InterviewExecutionGuard());
         engine.setCompiledGraph();
     }
 

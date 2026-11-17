@@ -74,7 +74,7 @@ class InterviewWorkflowEngineTest {
 
     @Test
     @DisplayName("pauseInterview 更新 DB 状态为 PAUSED")
-    void pauseInterview_updatesDbStatusPaused() {
+    void pauseInterview_updatesDbStatusPaused() throws Exception {
         engine.pauseInterview(100L);
         verify(sessionService).updateStatus(100L, SessionStatus.PAUSED);
     }

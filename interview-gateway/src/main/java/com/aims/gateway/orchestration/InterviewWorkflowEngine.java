@@ -81,6 +81,7 @@ public class InterviewWorkflowEngine {
     private boolean engineEnabled;
 
     private CompiledGraph<InterviewState> compiledGraph;
+    private final InterviewExecutionGuard executionGuard;
 
     @Autowired
     public InterviewWorkflowEngine(
@@ -93,7 +94,8 @@ public class InterviewWorkflowEngine {
             ApplicationEventPublisher eventPublisher,
             EvaluationMessageProducer evaluationMessageProducer,
             InterviewSessionStore sessionStore,
-            WebSocketSessionManager sessionManager) {
+            WebSocketSessionManager sessionManager,
+            InterviewExecutionGuard executionGuard) {
         this.graphFactory = graphFactory;
         this.checkpointSaver = checkpointSaver;
         this.statePersistenceService = statePersistenceService;
@@ -104,6 +106,7 @@ public class InterviewWorkflowEngine {
         this.evaluationMessageProducer = evaluationMessageProducer;
         this.sessionStore = sessionStore;
         this.sessionManager = sessionManager;
+        this.executionGuard = executionGuard;
     }
 
     /** 测试用：无 metrics/事件发布器/Producer/SessionStore/SessionManager（保持与已有测试兼容）。 */
@@ -123,7 +126,8 @@ public class InterviewWorkflowEngine {
                 null,
                 null,
                 null,
-                null);
+                null,
+                new InterviewExecutionGuard());
     }
 
     /**
@@ -137,6 +141,10 @@ public class InterviewWorkflowEngine {
      * @throws Exception Graph 执行异常
      */
     public boolean startInterview(Long sessionId) throws Exception {
+        return executionGuard.awaitExecute(sessionId, () -> startInterviewLocked(sessionId));
+    }
+
+    private boolean startInterviewLocked(Long sessionId) throws Exception {
         log.info("Engine 启动面试 sessionId={}", sessionId);
         incrementExecution("startInterview", "invoked");
 
@@ -226,6 +234,15 @@ public class InterviewWorkflowEngine {
      * @throws Exception Graph 执行异常
      */
     public void submitAnswer(Long sessionId, String answer) throws Exception {
+        executionGuard.tryExecute(
+                sessionId,
+                () -> {
+                    submitAnswerLocked(sessionId, answer);
+                    return null;
+                });
+    }
+
+    private void submitAnswerLocked(Long sessionId, String answer) throws Exception {
         log.info("Engine 提交回答 sessionId={} answerLen={}", sessionId, answer.length());
         incrementExecution("submitAnswer", "invoked");
 
@@ -273,6 +290,15 @@ public class InterviewWorkflowEngine {
      * @throws Exception Graph 执行异常
      */
     public void finishInterview(Long sessionId) throws Exception {
+        executionGuard.awaitExecute(
+                sessionId,
+                () -> {
+                    finishInterviewLocked(sessionId);
+                    return null;
+                });
+    }
+
+    private void finishInterviewLocked(Long sessionId) throws Exception {
         log.info("Engine 结束面试 sessionId={}", sessionId);
         incrementExecution("finishInterview", "invoked");
 
@@ -303,7 +329,16 @@ public class InterviewWorkflowEngine {
      *
      * @param sessionId 面试 sessionId
      */
-    public void pauseInterview(Long sessionId) {
+    public void pauseInterview(Long sessionId) throws Exception {
+        executionGuard.awaitExecute(
+                sessionId,
+                () -> {
+                    pauseInterviewLocked(sessionId);
+                    return null;
+                });
+    }
+
+    private void pauseInterviewLocked(Long sessionId) throws Exception {
         log.info("Engine 暂停面试 sessionId={}", sessionId);
         incrementExecution("pauseInterview", "invoked");
         sessionService.updateStatus(sessionId, SessionStatus.PAUSED);
@@ -317,6 +352,15 @@ public class InterviewWorkflowEngine {
      * @throws Exception checkpoint 释放异常
      */
     public void cancelInterview(Long sessionId) throws Exception {
+        executionGuard.awaitExecute(
+                sessionId,
+                () -> {
+                    cancelInterviewLocked(sessionId);
+                    return null;
+                });
+    }
+
+    private void cancelInterviewLocked(Long sessionId) throws Exception {
         log.info("Engine 取消面试 sessionId={}", sessionId);
         incrementExecution("cancelInterview", "invoked");
         releaseCheckpoint(sessionId);
@@ -358,6 +402,10 @@ public class InterviewWorkflowEngine {
      * @throws Exception Graph 执行异常
      */
     public ResumeResult resumeInterview(Long sessionId) throws Exception {
+        return executionGuard.awaitExecute(sessionId, () -> resumeInterviewLocked(sessionId));
+    }
+
+    private ResumeResult resumeInterviewLocked(Long sessionId) throws Exception {
         log.info("Engine 重连恢复 sessionId={}", sessionId);
         incrementExecution("resumeInterview", "invoked");
 

@@ -18,6 +18,7 @@ import com.aims.agent.orchestration.state.InterviewState;
 import com.aims.ai.memory.ConversationMemory;
 import com.aims.core.common.ErrorCode;
 import com.aims.core.session.SessionStatus;
+import com.aims.gateway.orchestration.InterviewExecutionGuard;
 import com.aims.gateway.orchestration.InterviewWorkflowEngine;
 import com.aims.infra.persistence.entity.InterviewRoundEntity;
 import com.aims.infra.persistence.entity.InterviewSessionEntity;
@@ -74,6 +75,7 @@ class InterviewWebSocketHandlerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private InterviewWebSocketHandler handler;
+    private final InterviewExecutionGuard executionGuard = new InterviewExecutionGuard();
 
     @BeforeEach
     void setUp() {
@@ -94,14 +96,17 @@ class InterviewWebSocketHandlerTest {
                         ttsServiceProvider,
                         rollingSummaryService,
                         engine,
-                        sessionManager);
+                        sessionManager,
+                        executionGuard);
         // handleTextMessage 第一步从 attributes 取 sessionId，多数测试必经；
         // shutdown 等测试不经过 handleTextMessage，用 lenient 避免 UnnecessaryStubbing
         java.util.Map<String, Object> attrs = new java.util.HashMap<>();
         attrs.put("sessionId", 32L);
+        attrs.put("connectionId", "conn-1");
         lenient().when(session.getAttributes()).thenReturn(attrs);
         // send() 会检查 isOpen；状态拒绝/未知类型测试发错误消息，delegatesToEngine 不发，用 lenient
         lenient().when(session.isOpen()).thenReturn(true);
+        lenient().when(sessionStore.getLockValue(32L)).thenReturn("conn-1");
     }
 
     private void setStatus(SessionStatus status) {
@@ -124,9 +129,10 @@ class InterviewWebSocketHandlerTest {
     void answer_inProgress_delegatesToEngine() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
         when(engine.isEnabled()).thenReturn(true);
+        when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(101L, 1));
 
         handler.handleTextMessage(
-                session, new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\"}"));
+                session, new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\",\"roundId\":101}"));
 
         verify(engine).submitAnswer(32L, "回答");
     }
@@ -194,7 +200,6 @@ class InterviewWebSocketHandlerTest {
     @DisplayName("连点提交：roundId 轮次已答 -> 拒绝（SESSION_ROUND_CONFLICT），不委托 Engine")
     void answer_duplicateRoundId_rejected() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
-        when(engine.isEnabled()).thenReturn(true);
         when(roundService.getCurrentRound(32L)).thenReturn(answeredRound(101L, 1, "已回答"));
 
         handler.handleTextMessage(
@@ -220,16 +225,16 @@ class InterviewWebSocketHandlerTest {
     }
 
     @Test
-    @DisplayName("旧客户端不传 roundId：跳过幂等校验，放行委托 Engine")
-    void answer_withoutRoundId_ok() throws Exception {
+    @DisplayName("缺少 roundId：拒绝提交，防止绕过轮次校验")
+    void answer_withoutRoundId_rejected() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
-        when(engine.isEnabled()).thenReturn(true);
         // roundId=null 时不查询轮次
         handler.handleTextMessage(
                 session, new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\"}"));
 
         verify(roundService, never()).listBySession(anyLong());
-        verify(engine).submitAnswer(32L, "回答");
+        verify(engine, never()).submitAnswer(any(), any());
+        assertEquals(ErrorCode.SESSION_MESSAGE_INVALID.getCode(), lastSent().get("code").asInt());
     }
 
     // ==================== FE.06 P2：断线重连 Engine 路径 ====================
@@ -300,13 +305,46 @@ class InterviewWebSocketHandlerTest {
         assertSentType("QUESTION_START");
     }
 
+    @Test
+    @DisplayName("连接接管：使用服务端身份执行原子接管，不预先删除旧锁")
+    void connectionUsesAtomicTakeoverWithAuthenticatedIdentity() throws Exception {
+        stubConnection();
+        session.getAttributes().put("guestSessionId", 32L);
+        when(roundService.listBySession(32L)).thenReturn(List.of(unansweredRound(101L, 1)));
+
+        handler.afterConnectionEstablished(session);
+
+        ArgumentCaptor<String> connection = ArgumentCaptor.forClass(String.class);
+        verify(sessionStore).tryLockOrTakeOver(eq(32L), connection.capture(), eq("guest:32"));
+        assertTrue(connection.getValue().endsWith("|guest:32"));
+        assertEquals(connection.getValue(), session.getAttributes().get("connectionId"));
+        verify(sessionStore, never()).forceUnlock(anyLong());
+        verify(sessionStore, never()).tryLock(anyLong(), anyString());
+        assertSentType("SESSION_READY");
+    }
+
+    @Test
+    @DisplayName("连接接管：原子接管被拒绝时关闭新连接，不恢复工作流或删除旧锁")
+    void rejectedTakeoverDoesNotResumeOrDeleteOwner() throws Exception {
+        stubConnection();
+        when(sessionStore.tryLockOrTakeOver(anyLong(), anyString(), anyString())).thenReturn(false);
+
+        handler.afterConnectionEstablished(session);
+
+        verify(sessionStore, never()).forceUnlock(anyLong());
+        verify(sessionManager, never()).register(anyLong(), any());
+        verify(engine, never()).resumeInterview(anyLong());
+        verify(session).close(any(org.springframework.web.socket.CloseStatus.class));
+        assertEquals(ErrorCode.SESSION_LOCKED.getCode(), lastSent().get("code").asInt());
+    }
+
     /** 连接建立公共桩：会话 IN_PROGRESS + 连接锁可用 + URI 携带 sessionId=32。 */
     private void stubConnection() {
         InterviewSessionEntity entity = new InterviewSessionEntity();
         entity.setId(32L);
         entity.setStatus(SessionStatus.IN_PROGRESS.name());
         when(sessionService.getById(32L)).thenReturn(entity);
-        when(sessionStore.tryLock(anyLong(), anyString())).thenReturn(true);
+        when(sessionStore.tryLockOrTakeOver(anyLong(), anyString(), anyString())).thenReturn(true);
         when(session.getUri()).thenReturn(java.net.URI.create("ws://localhost/ws/interview/32"));
     }
 
@@ -503,7 +541,6 @@ class InterviewWebSocketHandlerTest {
     @Test
     void answer_rejectsNonCurrentRound_evenIfUnanswered() throws Exception {
         setStatus(SessionStatus.IN_PROGRESS);
-        when(engine.isEnabled()).thenReturn(true);
         when(roundService.getCurrentRound(32L)).thenReturn(unansweredRound(102L, 2));
         handler.handleTextMessage(
                 session,
@@ -539,5 +576,183 @@ class InterviewWebSocketHandlerTest {
             }
         }
         assertTrue(found);
+    }
+
+    @Test
+    void concurrentAnswerIsBusyAndDisconnectCleansUpAfterExecution() throws Exception {
+        setStatus(SessionStatus.IN_PROGRESS);
+        when(engine.isEnabled()).thenReturn(true);
+        var round = unansweredRound(101L, 1);
+        when(roundService.getCurrentRound(32L)).thenReturn(round);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(
+                        invocation -> {
+                            entered.countDown();
+                            assertTrue(release.await(3, java.util.concurrent.TimeUnit.SECONDS));
+                            round.setAnswer("回答");
+                            return null;
+                        })
+                .when(engine)
+                .submitAnswer(32L, "回答");
+        var message = new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\",\"roundId\":101}");
+        try (var pool = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var first = pool.submit(() -> handler.handleTextMessage(session, message));
+            try {
+                assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS));
+                handler.handleTextMessage(session, message);
+                assertEquals(ErrorCode.SESSION_BUSY.getCode(), lastSent().path("code").asInt());
+                verify(roundService).getCurrentRound(32L);
+                handler.afterConnectionClosed(
+                        session, org.springframework.web.socket.CloseStatus.NORMAL);
+                verify(sessionService, never()).tryTransitionTo(anyLong(), any(), any(), any());
+            } finally {
+                release.countDown();
+            }
+            first.get(3, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        verify(engine).submitAnswer(32L, "回答");
+        verify(sessionStore).unlock(32L, "conn-1");
+        verify(sessionService)
+                .tryTransitionTo(
+                        32L,
+                        SessionStatus.PAUSED,
+                        SessionStatus.IN_PROGRESS,
+                        SessionStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void sequentialDuplicateCannotAdvanceGraphTwice() throws Exception {
+        setStatus(SessionStatus.IN_PROGRESS);
+        when(engine.isEnabled()).thenReturn(true);
+        var current = unansweredRound(101L, 1);
+        when(roundService.getCurrentRound(32L)).thenReturn(current);
+        org.mockito.Mockito.doAnswer(
+                        invocation -> {
+                            current.setAnswer("回答");
+                            return null;
+                        })
+                .when(engine)
+                .submitAnswer(32L, "回答");
+        var message = new TextMessage("{\"type\":\"ANSWER\",\"text\":\"回答\",\"roundId\":101}");
+        handler.handleTextMessage(session, message);
+        handler.handleTextMessage(session, message);
+        verify(engine).submitAnswer(32L, "回答");
+        assertEquals(ErrorCode.SESSION_ROUND_CONFLICT.getCode(), lastSent().path("code").asInt());
+    }
+
+    @Test
+    void oldConnectionCannotSubmitOrPauseNewOwner() throws Exception {
+        when(sessionStore.getLockValue(32L)).thenReturn("new-owner");
+        handler.handleTextMessage(
+                session,
+                new TextMessage("{\"type\":\"ANSWER\",\"text\":\"旧连接回答\",\"roundId\":101}"));
+        assertEquals(ErrorCode.SESSION_LOCKED.getCode(), lastSent().path("code").asInt());
+        handler.afterConnectionClosed(session, org.springframework.web.socket.CloseStatus.NORMAL);
+        verify(engine, never()).submitAnswer(any(), any());
+        verify(sessionStore, never()).unlock(anyLong(), anyString());
+        verify(sessionService, never()).tryTransitionTo(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void reconnectWaitsForOldAnswerAndReadsUpdatedRound() throws Exception {
+        setStatus(SessionStatus.IN_PROGRESS);
+        when(engine.isEnabled()).thenReturn(true);
+        var owner = new java.util.concurrent.atomic.AtomicReference<>("conn-1");
+        when(sessionStore.getLockValue(32L)).thenAnswer(invocation -> owner.get());
+        var current = new java.util.concurrent.atomic.AtomicReference<>(unansweredRound(101L, 1));
+        when(roundService.getCurrentRound(32L)).thenAnswer(invocation -> current.get());
+        when(roundService.listBySession(32L)).thenAnswer(invocation -> List.of(current.get()));
+        when(engine.resumeInterview(32L)).thenReturn(InterviewWorkflowEngine.ResumeResult.RESUMED);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var connecting = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(
+                        invocation -> {
+                            entered.countDown();
+                            assertTrue(release.await(3, java.util.concurrent.TimeUnit.SECONDS));
+                            current.set(unansweredRound(102L, 2));
+                            return null;
+                        })
+                .when(engine)
+                .submitAnswer(32L, "回答");
+        when(sessionStore.tryLockOrTakeOver(eq(32L), anyString(), anyString()))
+                .thenAnswer(
+                        invocation -> {
+                            assertEquals(102L, current.get().getId());
+                            owner.set(invocation.getArgument(1));
+                            return true;
+                        });
+        var next = org.mockito.Mockito.mock(WebSocketSession.class);
+        when(next.getAttributes()).thenReturn(new java.util.concurrent.ConcurrentHashMap<>());
+        when(next.isOpen()).thenReturn(true);
+        when(next.getUri())
+                .thenAnswer(
+                        invocation -> {
+                            connecting.countDown();
+                            return java.net.URI.create("ws://localhost/ws/interview/32");
+                        });
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first =
+                    pool.submit(
+                            () ->
+                                    handler.handleTextMessage(
+                                            session,
+                                            new TextMessage(
+                                                    "{\"type\":\"ANSWER\",\"text\":\"回答\",\"roundId\":101}")));
+            java.util.concurrent.Future<?> recovery;
+            try {
+                assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS));
+                recovery =
+                        pool.submit(
+                                () -> {
+                                    handler.afterConnectionEstablished(next);
+                                    return null;
+                                });
+                assertTrue(connecting.await(3, java.util.concurrent.TimeUnit.SECONDS));
+                verify(engine, never()).resumeInterview(anyLong());
+            } finally {
+                release.countDown();
+            }
+            first.get(3, java.util.concurrent.TimeUnit.SECONDS);
+            recovery.get(3, java.util.concurrent.TimeUnit.SECONDS);
+        }
+        verify(engine).resumeInterview(32L);
+        var sent = ArgumentCaptor.forClass(TextMessage.class);
+        verify(next, atLeastOnce()).sendMessage(sent.capture());
+        assertTrue(
+                sent.getAllValues().stream()
+                        .anyMatch(
+                                message -> {
+                                    try {
+                                        var json = objectMapper.readTree(message.getPayload());
+                                        return "QUESTION_START".equals(json.path("type").asText())
+                                                && json.path("roundId").asLong() == 102L;
+                                    } catch (Exception e) {
+                                        throw new AssertionError(e);
+                                    }
+                                }));
+        handler.afterConnectionClosed(session, org.springframework.web.socket.CloseStatus.NORMAL);
+        verify(sessionService, never()).tryTransitionTo(anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void closedConnectionWithExpiredLeaseStillPausesIfNoControllerRemains() {
+        when(sessionStore.getLockValue(32L)).thenReturn(null);
+        handler.afterConnectionClosed(session, org.springframework.web.socket.CloseStatus.NORMAL);
+        verify(sessionService)
+                .tryTransitionTo(
+                        32L,
+                        SessionStatus.PAUSED,
+                        SessionStatus.IN_PROGRESS,
+                        SessionStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void expiredOldConnectionDoesNotPauseActiveReplacement() {
+        when(sessionStore.getLockValue(32L)).thenReturn(null);
+        when(sessionManager.hasActiveController(32L)).thenReturn(true);
+        handler.afterConnectionClosed(session, org.springframework.web.socket.CloseStatus.NORMAL);
+        verify(sessionService, never()).tryTransitionTo(anyLong(), any(), any(), any());
     }
 }

@@ -100,7 +100,7 @@ export interface PlannedQuestion {
 
 /** WebSocket 客户端 -> 服务端消息 */
 export type WsClientMessage =
-  | { type: 'ANSWER'; text: string }
+  | { type: 'ANSWER'; text: string; roundId: number }
   | { type: 'HEARTBEAT' }
   | { type: 'PAUSE' }
   | { type: 'FINISH' }

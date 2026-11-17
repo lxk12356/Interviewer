@@ -12,6 +12,7 @@ import com.aims.core.interview.InterviewPlan;
 import com.aims.core.interview.InterviewerPersona;
 import com.aims.core.interview.PlannedQuestion;
 import com.aims.core.session.SessionStatus;
+import com.aims.gateway.orchestration.InterviewExecutionGuard;
 import com.aims.gateway.orchestration.InterviewWorkflowEngine;
 import com.aims.infra.persistence.entity.InterviewRoundEntity;
 import com.aims.infra.persistence.entity.InterviewSessionEntity;
@@ -58,7 +59,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  *
  * <p>面试计划生成由 REST {@code POST /api/v1/interviews/{id}/start} 唯一负责，WebSocket 只读取已保存的 plan_json。
  *
- * <p>线程安全：每个 WebSocket 会话独立，发送消息时使用 synchronized 防止并发写入。
+ * <p>线程安全：业务执行按面试 sessionId 互斥；发送消息时使用 synchronized 防止同一连接并发写入。
  */
 @Component
 public class InterviewWebSocketHandler extends TextWebSocketHandler {
@@ -68,6 +69,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
     // ---- session attributes keys ----
     private static final String ATTR_SESSION_ID = "sessionId";
     private static final String ATTR_CONNECTION_ID = "connectionId";
+    private static final String ATTR_CLOSED = "executionClosed";
 
     // ---- 业务常量 ----
     private static final int RAG_TOP_K = 10;
@@ -93,6 +95,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
     // Phase 5 新增：Engine 委托路径 + 会话管理
     private final InterviewWorkflowEngine engine;
     private final WebSocketSessionManager sessionManager;
+    private final InterviewExecutionGuard executionGuard;
 
     public InterviewWebSocketHandler(
             InterviewSessionService sessionService,
@@ -110,7 +113,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             ObjectProvider<TtsService> ttsServiceProvider,
             RollingSummaryService rollingSummaryService,
             InterviewWorkflowEngine engine,
-            WebSocketSessionManager sessionManager) {
+            WebSocketSessionManager sessionManager,
+            InterviewExecutionGuard executionGuard) {
         this.sessionService = sessionService;
         this.roundService = roundService;
         this.sessionStore = sessionStore;
@@ -127,6 +131,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
         this.rollingSummaryService = rollingSummaryService;
         this.engine = engine;
         this.sessionManager = sessionManager;
+        this.executionGuard = executionGuard;
     }
 
     // ==================== 连接生命周期 ====================
@@ -140,6 +145,21 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        try {
+            executionGuard.awaitExecute(
+                    sessionId,
+                    () -> {
+                        establishConnectionLocked(session, sessionId);
+                        return null;
+                    });
+        } catch (InterviewExecutionGuard.BusyException e) {
+            sendBusy(session);
+            session.close(new CloseStatus(1013, "interview busy"));
+        }
+    }
+
+    private void establishConnectionLocked(WebSocketSession session, Long sessionId)
+            throws Exception {
         // 校验会话存在
         InterviewSessionEntity entity;
         try {
@@ -175,16 +195,8 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
         // 生成连接 ID 并尝试获取连接锁（连接 ID 附身份后缀，供同身份抢占判断）
         String identity = buildIdentity(session);
         String connectionId = UUID.randomUUID().toString() + "|" + identity;
-        boolean locked = sessionStore.tryLock(sessionId, connectionId);
-        if (!locked) {
-            // 同身份抢占：F5 刷新/断线重连时旧锁（TTL 60s）残留，同一候选人/用户允许抢占
-            String owner = sessionStore.getLockValue(sessionId);
-            if (owner != null && owner.endsWith("|" + identity)) {
-                log.info("同身份连接抢占旧锁 sessionId={} owner={}", sessionId, owner);
-                sessionStore.forceUnlock(sessionId);
-                locked = sessionStore.tryLock(sessionId, connectionId);
-            }
-        }
+        // F5 / 断线重连允许同身份接管，身份比对与替换由 Redis Lua 原子完成。
+        boolean locked = sessionStore.tryLockOrTakeOver(sessionId, connectionId, identity);
         if (!locked) {
             send(session, WsOutbound.error(ErrorCode.SESSION_LOCKED.getCode(), "会话已被其他连接占用"));
             session.close(CloseStatus.NOT_ACCEPTABLE.withReason("session locked"));
@@ -464,39 +476,74 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
         }
 
         try {
-            if (inbound.isType("START")) {
-                send(
-                        session,
-                        WsOutbound.error(
-                                ErrorCode.SESSION_MESSAGE_INVALID.getCode(),
-                                "面试计划请通过 REST /start 接口生成，WebSocket 不再支持 START 消息"));
-            } else if (inbound.isType("BEGIN")) {
-                // 候选端确认开始后触发首题：复用连接建立时的 handleReconnectOrStart，
-                // 避免前端 reconnect 关闭旧连接触发断线自动暂停（IN_PROGRESS -> PAUSED）
-                handleBegin(session, sessionId);
-            } else if (inbound.isType("ANSWER")) {
-                handleAnswer(session, sessionId, inbound.text(), inbound.roundId());
-            } else if (inbound.isType("HEARTBEAT")) {
+            if (inbound.isType("HEARTBEAT")) {
                 handleHeartbeat(session, sessionId);
-            } else if (inbound.isType("PAUSE")) {
-                handlePause(session, sessionId);
-            } else if (inbound.isType("FINISH")) {
-                handleFinish(session, sessionId);
-            } else if (inbound.isType("CANCEL")) {
-                handleCancel(session, sessionId);
-            } else {
-                send(
-                        session,
-                        WsOutbound.error(
-                                ErrorCode.SESSION_MESSAGE_INVALID.getCode(),
-                                "不支持的消息类型: " + inbound.type()));
+                return;
             }
+            java.util.concurrent.Callable<Void> operation =
+                    () -> {
+                        String connectionId =
+                                (String) session.getAttributes().get(ATTR_CONNECTION_ID);
+                        if (Boolean.TRUE.equals(session.getAttributes().get(ATTR_CLOSED))
+                                || connectionId == null
+                                || !connectionId.equals(sessionStore.getLockValue(sessionId))) {
+                            send(
+                                    session,
+                                    WsOutbound.error(
+                                            ErrorCode.SESSION_LOCKED.getCode(), "连接已失效，请重新连接"));
+                            return null;
+                        }
+                        dispatchMessageLocked(session, sessionId, inbound);
+                        return null;
+                    };
+            if (inbound.isType("ANSWER")) {
+                executionGuard.tryExecute(sessionId, operation);
+            } else {
+                executionGuard.awaitExecute(sessionId, operation);
+            }
+        } catch (InterviewExecutionGuard.BusyException e) {
+            sendBusy(session);
         } catch (Exception e) {
             log.error("处理 WebSocket 消息异常 sessionId={} type={}", sessionId, inbound.type(), e);
             send(
                     session,
                     WsOutbound.error(
                             ErrorCode.INTERNAL_ERROR.getCode(), "处理消息异常: " + e.getMessage()));
+        }
+    }
+
+    private void sendBusy(WebSocketSession session) {
+        send(session, WsOutbound.error(ErrorCode.SESSION_BUSY.getCode(), "当前面试正在处理，请稍后重试"));
+    }
+
+    private void dispatchMessageLocked(WebSocketSession session, Long sessionId, WsInbound inbound)
+            throws Exception {
+        if (inbound.isType("START")) {
+            send(
+                    session,
+                    WsOutbound.error(
+                            ErrorCode.SESSION_MESSAGE_INVALID.getCode(),
+                            "面试计划请通过 REST /start 接口生成，WebSocket 不再支持 START 消息"));
+        } else if (inbound.isType("BEGIN")) {
+            // 候选端确认开始后触发首题：复用连接建立时的 handleReconnectOrStart，
+            // 避免前端 reconnect 关闭旧连接触发断线自动暂停（IN_PROGRESS -> PAUSED）
+            handleBegin(session, sessionId);
+        } else if (inbound.isType("ANSWER")) {
+            handleAnswer(session, sessionId, inbound.text(), inbound.roundId());
+        } else if (inbound.isType("HEARTBEAT")) {
+            handleHeartbeat(session, sessionId);
+        } else if (inbound.isType("PAUSE")) {
+            handlePause(session, sessionId);
+        } else if (inbound.isType("FINISH")) {
+            handleFinish(session, sessionId);
+        } else if (inbound.isType("CANCEL")) {
+            handleCancel(session, sessionId);
+        } else {
+            send(
+                    session,
+                    WsOutbound.error(
+                            ErrorCode.SESSION_MESSAGE_INVALID.getCode(),
+                            "不支持的消息类型: " + inbound.type()));
         }
     }
 
@@ -515,29 +562,32 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // 释放连接锁
-        sessionStore.unlock(sessionId, connectionId);
-        // Phase 5：从 SessionManager 注销（带连接身份校验，避免旧连接关闭回调误删新注册连接）
+        // 立即注销连接，清理排到当前执行结束后，避免阻塞流式回调线程。
+        session.getAttributes().put(ATTR_CLOSED, true);
         sessionManager.unregister(sessionId, session);
-        log.info(
-                "WebSocket 连接关闭 sessionId={} connectionId={} status={}",
-                sessionId,
-                connectionId,
-                status);
+        executionGuard.afterCurrent(sessionId, () -> cleanupClosedConnection(session, sessionId));
+    }
 
-        // 如果状态为 IN_PROGRESS 则转为 PAUSED
-        // FE.10 P6：用原子转移（仅 IN_PROGRESS -> PAUSED），不覆盖已存在的 EVALUATING 等终态
-        // （断线发生在面试已结束、评估已触发之后时不回退状态）
-        try {
-            sessionService.tryTransitionTo(
-                    sessionId,
-                    SessionStatus.PAUSED,
-                    SessionStatus.IN_PROGRESS,
-                    SessionStatus.IN_PROGRESS);
-            log.info("连接断开，会话自动暂停（原子转移） sessionId={}", sessionId);
-        } catch (Exception e) {
-            log.warn("连接关闭后状态处理失败 sessionId={}", sessionId, e);
+    /** 必须持有执行锁；旧连接关闭不得释放新连接的锁或暂停新连接恢复后的会话。 */
+    private void cleanupClosedConnection(WebSocketSession session, Long sessionId) {
+        if (!Boolean.TRUE.equals(session.getAttributes().get(ATTR_CLOSED))) {
+            return;
         }
+        String connectionId = (String) session.getAttributes().get(ATTR_CONNECTION_ID);
+        String owner = sessionStore.getLockValue(sessionId);
+        if (connectionId == null || (owner != null && !connectionId.equals(owner))) {
+            return;
+        }
+        // 长调用中连接租约可能过期；只有没有其他主连接时才按断线暂停。
+        if (owner == null && sessionManager.hasActiveController(sessionId)) {
+            return;
+        }
+        sessionStore.unlock(sessionId, connectionId);
+        sessionService.tryTransitionTo(
+                sessionId,
+                SessionStatus.PAUSED,
+                SessionStatus.IN_PROGRESS,
+                SessionStatus.IN_PROGRESS);
     }
 
     /**
@@ -591,9 +641,28 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        if (roundId == null) {
+            send(
+                    session,
+                    WsOutbound.error(
+                            ErrorCode.SESSION_MESSAGE_INVALID.getCode(), "提交回答必须携带 roundId"));
+            return;
+        }
+        // 校验与执行共享 sessionId 锁，不能先查轮次再到 Engine 内加锁。
+        InterviewRoundEntity currentRound = roundService.getCurrentRound(sessionId);
+        if (currentRound == null
+                || !roundId.equals(currentRound.getId())
+                || (currentRound.getAnswer() != null && !currentRound.getAnswer().isBlank())) {
+            send(
+                    session,
+                    WsOutbound.error(
+                            ErrorCode.SESSION_ROUND_CONFLICT.getCode(), "回答对应的题目已变化或已提交，请刷新当前题目"));
+            return;
+        }
+
         // Phase 5：Engine 启用时委托 Engine，否则走旧命令式路径
         if (engine.isEnabled()) {
-            handleAnswerViaEngine(session, sessionId, text, roundId);
+            handleAnswerViaEngine(session, sessionId, text);
             return;
         }
 
@@ -610,21 +679,6 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
                     WsOutbound.error(
                             ErrorCode.SESSION_MESSAGE_INVALID.getCode(),
                             "回答内容超过 " + MAX_ANSWER_LENGTH + " 字符"));
-            return;
-        }
-
-        // 查找当前未回答的轮次（最后一个 answer 为空的轮次）
-        List<InterviewRoundEntity> rounds = roundService.listBySession(sessionId);
-        InterviewRoundEntity currentRound = null;
-        for (int i = rounds.size() - 1; i >= 0; i--) {
-            InterviewRoundEntity r = rounds.get(i);
-            if (r.getAnswer() == null || r.getAnswer().isBlank()) {
-                currentRound = r;
-                break;
-            }
-        }
-        if (currentRound == null) {
-            send(session, WsOutbound.error(ErrorCode.SESSION_ROUND_CONFLICT.getCode(), "没有待回答的问题"));
             return;
         }
 
@@ -697,7 +751,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
     }
 
     /** PAUSE：暂停会话。 */
-    private void handlePause(WebSocketSession session, Long sessionId) {
+    private void handlePause(WebSocketSession session, Long sessionId) throws Exception {
         // Phase 5：Engine 启用时委托
         if (engine.isEnabled()) {
             engine.pauseInterview(sessionId);
@@ -793,8 +847,7 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
      * <p>Graph 在 interruptBefore(ANSWER) 暂停时，Engine.submitAnswer 注入 answer → resume → 执行到下一个 ASK 或
      * END。流式 chunk 由 WebSocketStreamEmitter 自动推送。
      */
-    private void handleAnswerViaEngine(
-            WebSocketSession session, Long sessionId, String text, Long roundId) {
+    private void handleAnswerViaEngine(WebSocketSession session, Long sessionId, String text) {
         if (text == null || text.isBlank()) {
             send(
                     session,
@@ -810,20 +863,6 @@ public class InterviewWebSocketHandler extends TextWebSocketHandler {
             return;
         }
         try {
-            // roundId 为 null 时兼容旧客户端；显式 ID 必须匹配当前未答轮次。
-            if (roundId != null) {
-                InterviewRoundEntity current = roundService.getCurrentRound(sessionId);
-                if (current == null
-                        || !roundId.equals(current.getId())
-                        || (current.getAnswer() != null && !current.getAnswer().isBlank())) {
-                    send(
-                            session,
-                            WsOutbound.error(
-                                    ErrorCode.SESSION_ROUND_CONFLICT.getCode(),
-                                    "回答对应的题目已变化或已提交，请刷新当前题目"));
-                    return;
-                }
-            }
             engine.submitAnswer(sessionId, text);
             log.info("回答已提交（Engine）sessionId={}", sessionId);
         } catch (Exception e) {

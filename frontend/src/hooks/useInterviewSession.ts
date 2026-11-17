@@ -124,11 +124,14 @@ export function useInterviewSession({ sessionId, token }: UseInterviewSessionOpt
   /** 提交回答 */
   const submitAnswer = useCallback(
     (text: string) => {
-      if (!text.trim()) return;
-      store.addAnswer(text.trim(), store.currentRoundId ?? undefined);
-      send({ type: 'ANSWER', text: text.trim() } satisfies WsClientMessage);
+      const current = useSessionStore.getState();
+      const roundId = current.currentRoundId;
+      if (!text.trim() || !current.isConnected || current.isStreaming || roundId == null) return;
+      if (send({ type: 'ANSWER', text: text.trim(), roundId } satisfies WsClientMessage)) {
+        current.addAnswer(text.trim(), roundId);
+      }
     },
-    [send, store],
+    [send],
   );
 
   /** 暂停面试 */

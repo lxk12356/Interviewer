@@ -51,7 +51,20 @@ public class WebSocketSessionManager {
      * @param session WebSocket 会话
      */
     public void register(Long sessionId, WebSocketSession session) {
-        sessions.computeIfAbsent(sessionId, k -> new CopyOnWriteArraySet<>()).add(session);
+        sessions.compute(
+                sessionId,
+                (id, existing) -> {
+                    var set =
+                            existing == null
+                                    ? new CopyOnWriteArraySet<WebSocketSession>()
+                                    : existing;
+                    // 新主连接已经在 Handler 持锁校验归属；替换旧主连接，保留观察者。
+                    if (!isRole(session, ROLE_OBSERVER)) {
+                        set.removeIf(previous -> !isRole(previous, ROLE_OBSERVER));
+                    }
+                    set.add(session);
+                    return set;
+                });
     }
 
     /**
@@ -64,14 +77,20 @@ public class WebSocketSessionManager {
      * @param session 正在关闭的 WebSocket 会话
      */
     public void unregister(Long sessionId, WebSocketSession session) {
-        CopyOnWriteArraySet<WebSocketSession> set = sessions.get(sessionId);
-        if (set == null) {
-            return;
-        }
-        set.remove(session);
-        if (set.isEmpty()) {
-            sessions.remove(sessionId, set);
-        }
+        sessions.computeIfPresent(
+                sessionId,
+                (id, set) -> {
+                    set.remove(session);
+                    return set.isEmpty() ? null : set;
+                });
+    }
+
+    /** 观察者在线不代表候选端仍在线。 */
+    public boolean hasActiveController(Long sessionId) {
+        var set = sessions.get(sessionId);
+        return set != null
+                && set.stream()
+                        .anyMatch(session -> session.isOpen() && !isRole(session, ROLE_OBSERVER));
     }
 
     /**

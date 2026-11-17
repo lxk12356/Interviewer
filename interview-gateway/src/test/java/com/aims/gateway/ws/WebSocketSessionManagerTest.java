@@ -64,4 +64,23 @@ class WebSocketSessionManagerTest {
         // 不抛异常即通过
         manager.closeAll(CloseStatus.SERVICE_RESTARTED);
     }
+
+    @Test
+    void takeoverRoutesToNewControllerAndKeepsObserver() {
+        var observer = org.mockito.Mockito.mock(WebSocketSession.class);
+        var replacement = org.mockito.Mockito.mock(WebSocketSession.class);
+        when(observer.getAttributes())
+                .thenReturn(java.util.Map.of("role", WebSocketSessionManager.ROLE_OBSERVER));
+        when(observer.isOpen()).thenReturn(true);
+        when(replacement.isOpen()).thenReturn(true);
+        manager.register(1L, openSession);
+        manager.register(1L, observer);
+        manager.register(1L, replacement);
+        manager.unregister(1L, openSession);
+        org.junit.jupiter.api.Assertions.assertSame(replacement, manager.getSession(1L));
+        org.junit.jupiter.api.Assertions.assertTrue(manager.hasActiveController(1L));
+        manager.unregister(1L, replacement);
+        org.junit.jupiter.api.Assertions.assertSame(observer, manager.getSession(1L));
+        org.junit.jupiter.api.Assertions.assertFalse(manager.hasActiveController(1L));
+    }
 }
